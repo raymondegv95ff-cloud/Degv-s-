@@ -1,0 +1,169 @@
+{
+  "name": "Degv's Messenger",
+  "short_name": "Degv's",
+  "description": "Aplicación de mensajería instantánea de alta velocidad con Inteligencia Artificial Gemini, notas de voz, llamadas y cifrado.",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "display_override": ["tabbed", "standalone", "window-controls-overlay", "minimal-ui"],
+  "tab_strip": {
+    "home_tab": {
+      "scope": "/",
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    "new_tab_button": {
+      "url": "/?action=new-chat"
+    }
+  },
+  "background_color": "#050505",
+  "theme_color": "#00E676",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "es",
+  "dir": "ltr",
+  "categories": ["social", "communication", "productivity"],
+  "iarc_rating_id": "IARC-12345678-DEGV",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "64x64 32x32 16x16",
+      "type": "image/svg+xml"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Degv's Messenger Desktop View"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Degv's Messenger Mobile View"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Nuevo Chat",
+      "short_name": "Nuevo",
+      "description": "Iniciar una nueva conversación",
+      "url": "/?action=new-chat",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }]
+    },
+    {
+      "name": "Degv's AI",
+      "short_name": "IA Chat",
+      "description": "Conversar con el Asistente IA",
+      "url": "/?action=ai-chat",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }]
+    }
+  ],
+  "related_applications": [
+    {
+      "platform": "play",
+      "url": "https://play.google.com/store/apps/details?id=com.degv.messenger",
+      "id": "com.degv.messenger"
+    },
+    {
+      "platform": "itunes",
+      "url": "https://apps.apple.com/app/degvs-messenger/id123456789"
+    }
+  ],
+  "prefer_related_applications": false,
+  "scope_extensions": [
+    {
+      "origin": "*.degvs.app"
+    },
+    {
+      "origin": "auth.degvs.app"
+    },
+    {
+      "origin": "messenger.degvs.app"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "/",
+      "accept": {
+        "image/*": [".png", ".jpg", ".jpeg", ".webp"]
+      }
+    }
+  ],
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "protocol_handlers": [
+    {
+      "protocol": "web+degv",
+      "url": "/?chat=%s"
+    }
+  ],
+  "share_target": {
+    "action": "/?action=share",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "widgets": [
+    {
+      "name": "Degv's Chat Widget",
+      "short_name": "Degv's",
+      "description": "Mensajes recientes y chats activos",
+      "tag": "degv-widget",
+      "template": "widget-template",
+      "ms_tile_image": "/icon-192.png",
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ],
+      "auth": false,
+      "update_interval": 300
+    }
+  ],
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "note_taking": {
+    "new_note_url": "/?action=new-note"
+  }
+}

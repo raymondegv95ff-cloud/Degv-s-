@@ -1,0 +1,6 @@
+{
+  "name": "Degv's Messenger",
+  "description": "Aplicación web de mensajería instantánea estilo WhatsApp Web con IA integrada (Degv's AI), cifrado, notas de voz, bóveda secreta y soporte PWA.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

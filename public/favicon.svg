@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="100%" height="100%">
+  <defs>
+    <radialGradient id="favBg" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#09261B" />
+      <stop offset="100%" stop-color="#020506" />
+    </radialGradient>
+    <linearGradient id="favGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00FF7F" />
+      <stop offset="100%" stop-color="#00E676" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Squircle -->
+  <rect width="64" height="64" rx="16" fill="url(#favBg)" />
+  <rect width="62" height="62" x="1" y="1" rx="15" fill="none" stroke="#00FF7F" stroke-width="1.5" stroke-opacity="0.6" />
+
+  <!-- Neon Glowing Crest Chat Bubble -->
+  <path d="M 18 16 L 46 16 C 52 16 56 20 56 26 L 56 36 C 56 42 52 46 46 46 L 34 46 L 22 54 L 24 46 L 18 46 C 12 46 8 42 8 36 L 8 26 C 8 20 12 16 18 16 Z"
+        fill="none" stroke="url(#favGreen)" stroke-width="5" stroke-linejoin="round" />
+
+  <!-- D-Core -->
+  <path d="M 24 24 L 34 24 C 40 24 44 27 44 31 C 44 35 40 38 34 38 L 24 38 Z"
+        fill="none" stroke="#00F0FF" stroke-width="3.5" />
+
+  <!-- Sparkle dot -->
+  <circle cx="48" cy="14" r="3" fill="#00FF7F" />
+</svg>

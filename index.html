@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Degv's Messenger</title>
+    <meta name="description" content="Aplicación de mensajería al estilo WhatsApp Web con Degv's AI, llamadas, notas de voz y cifrado de extremo a extremo." />
+    
+    <!-- PWA & Android Theme Config -->
+    <meta name="theme-color" content="#00E676" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="Degv's Messenger" />
+
+    <!-- iOS Apple Web App Configuration -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Degv's Messenger" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png" />
+
+    <!-- iOS Splash Screens Configuration -->
+    <!-- iPhone SE, 8, 7, 6s -->
+    <link rel="apple-touch-startup-image" href="/icon.svg" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2)" />
+    <!-- iPhone X, XS, 11 Pro, 12 Mini, 13 Mini -->
+    <link rel="apple-touch-startup-image" href="/icon.svg" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3)" />
+    <!-- iPhone XR, 11 -->
+    <link rel="apple-touch-startup-image" href="/icon.svg" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2)" />
+    <!-- iPhone 12, 12 Pro, 13, 13 Pro, 14 -->
+    <link rel="apple-touch-startup-image" href="/icon.svg" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)" />
+    <!-- iPhone 14 Pro, 15, 15 Pro -->
+    <link rel="apple-touch-startup-image" href="/icon.svg" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)" />
+    <!-- iPhone 14 Pro Max, 15 Plus, 15 Pro Max -->
+    <link rel="apple-touch-startup-image" href="/icon.svg" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3)" />
+
+    <!-- Favicons, Fonts & Manifest -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&family=Playfair+Display:ital,wght@0,600;0,800;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.json" />
+  </head>
+  <body class="bg-[#050505] text-slate-100 antialiased selection:bg-[#00E676]/30 overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        let refreshing = false;
+
+        // Auto reload when new SW takes control of client
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!refreshing) {
+            refreshing = true;
+            console.log('[PWA] New version activated, reloading application...');
+            window.location.reload();
+          }
+        });
+
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => {
+              console.log('[PWA] Service Worker registered scope:', reg.scope);
+
+              // Check for SW updates on load
+              reg.update();
+
+              // Listen for new worker installation
+              reg.addEventListener('updatefound', () => {
+                const newWorker = reg.installing;
+                if (newWorker) {
+                  newWorker.addEventListener('statechange', () => {
+                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                      console.log('[PWA] New update available! Activating immediately...');
+                      newWorker.postMessage({ type: 'SKIP_WAITING' });
+                    }
+                  });
+                }
+              });
+            })
+            .catch(err => console.error('[PWA] Service Worker registration failed:', err));
+
+          // Check for update every time PWA gains focus (app re-opened from background)
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+              navigator.serviceWorker.getRegistration().then(reg => {
+                if (reg) {
+                  console.log('[PWA] Visibility changed to visible, checking for publish updates...');
+                  reg.update();
+                }
+              });
+            }
+          });
+
+          // Periodic check every 10 minutes while app is running
+          setInterval(() => {
+            navigator.serviceWorker.getRegistration().then(reg => {
+              if (reg) reg.update();
+            });
+          }, 10 * 60 * 1000);
+        });
+      }
+    </script>
+  </body>
+</html>
