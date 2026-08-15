@@ -1,5 +1,5 @@
-// Service Worker for Degv's Messenger - Stale-While-Revalidate, Background Sync & Auto-Update Engine
-const CACHE_NAME = 'degvs-messenger-v5';
+// Service Worker for Degv's Messenger - Stale-While-Revalidate, Background Sync & Cross-Platform Auto-Update Engine
+const CACHE_NAME = 'degvs-messenger-v6';
 
 // Core assets to pre-cache on install
 const PRECACHE_ASSETS = [
@@ -7,10 +7,12 @@ const PRECACHE_ASSETS = [
   '/index.html',
   '/manifest.json',
   '/favicon.svg',
-  '/icon.svg'
+  '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png'
 ];
 
-// Install Event: Pre-cache core shell assets and skip waiting immediately for PWA Builder apps
+// Install Event: Pre-cache core shell assets and skip waiting immediately for PWA Builder & Native apps
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing new Service Worker version:', CACHE_NAME);
   self.skipWaiting();
@@ -31,32 +33,44 @@ self.addEventListener('activate', (event) => {
         cacheNames
           .filter((name) => name !== CACHE_NAME)
           .map((name) => {
-            console.log('[SW] Removing old cache:', name);
+            console.log('[SW] Purging old cache for instant optimization:', name);
             return caches.delete(name);
           })
       );
     }).then(() => {
       return self.clients.claim();
     }).then(() => {
-      // Notify all PWA clients that update is complete
+      // Notify all PWA and WebView clients that update & cache optimization are active
       return self.clients.matchAll({ type: 'window' }).then((clients) => {
         clients.forEach((client) => {
-          client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME });
+          client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME, timestamp: Date.now() });
         });
       });
     })
   );
 });
 
-// Listen for explicit SKIP_WAITING and UPDATE messages from PWA app
+// Listen for explicit SKIP_WAITING, OPTIMIZE_AND_UPDATE, and CHECK_UPDATE messages from PWA app
 self.addEventListener('message', (event) => {
   if (event.data) {
     if (event.data.type === 'SKIP_WAITING') {
       console.log('[SW] Received SKIP_WAITING signal, skipping waiting');
       self.skipWaiting();
     } else if (event.data.type === 'CHECK_UPDATE') {
-      console.log('[SW] Checking for SW updates on published server');
+      console.log('[SW] Checking for SW updates on server');
       self.registration.update();
+    } else if (event.data.type === 'OPTIMIZE_AND_UPDATE' || event.data.type === 'PURGE_OLD_CACHES') {
+      console.log('[SW] Performing active cache purge and optimization');
+      caches.keys().then((keys) => {
+        return Promise.all(
+          keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
+        );
+      }).then(() => {
+        self.skipWaiting();
+        self.clients.matchAll({ type: 'window' }).then((clients) => {
+          clients.forEach((c) => c.postMessage({ type: 'SW_OPTIMIZATION_COMPLETE', version: CACHE_NAME }));
+        });
+      });
     }
   }
 });

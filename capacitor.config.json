@@ -1,0 +1,56 @@
+{
+  "appId": "com.degv.messenger",
+  "appName": "Degv's Messenger",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#050505",
+      "showSpinner": true,
+      "spinnerColor": "#00E676",
+      "splashFullScreen": true,
+      "splashImmersive": true
+    },
+    "Keyboard": {
+      "resize": "body",
+      "style": "DARK"
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon_config_sample",
+      "iconColor": "#00E676",
+      "sound": "beep.wav"
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "Camera": {
+      "permissions": ["camera", "photos"]
+    },
+    "Geolocation": {
+      "permissions": ["location", "coarseLocation"]
+    },
+    "LiveUpdates": {
+      "appId": "com.degv.messenger",
+      "channel": "Production",
+      "autoUpdateMethod": "background",
+      "maxVersions": 2,
+      "resetWhenUpdate": false
+    },
+    "Appflow": {
+      "appId": "com.degv.messenger",
+      "channel": "Production",
+      "syncOnResume": true
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Room } from "../../types";
+import { storageService } from "../../services/storageService";
 import {
   Phone,
   Video,
@@ -20,6 +21,9 @@ import {
   Minimize2,
   KeyRound,
   Sparkles,
+  HardDrive,
+  CheckCircle2,
+  Zap,
 } from "lucide-react";
 
 interface ChatHeaderProps {
@@ -54,8 +58,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isTyping,
 }) => {
   const [showMenu, setShowMenu] = useState(false);
+  const [showCacheInfo, setShowCacheInfo] = useState(false);
   const isAi = room.isAiChat;
   const isCurrentlyTyping = isTyping || room.isTyping;
+  const cachedMessagesCount = storageService.getRoomCachedCount(room.id);
 
   return (
     <header className="h-20 px-6 flex items-center justify-between border-b border-white/5 bg-[#0a0a0a]/90 backdrop-blur-md z-10 select-none">
@@ -108,20 +114,69 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 </span>
               )}
             </div>
-            {isCurrentlyTyping ? (
-              <span className="text-[11px] text-[#00E676] font-bold flex items-center gap-1.5 animate-in fade-in duration-150">
-                <span>Escribiendo</span>
-                <span className="flex items-center gap-0.5 ml-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-bounce [animation-delay:-0.3s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-bounce [animation-delay:-0.15s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-bounce" />
+
+            <div className="flex items-center gap-2 mt-0.5">
+              {isCurrentlyTyping ? (
+                <span className="text-[11px] text-[#00E676] font-bold flex items-center gap-1.5 animate-in fade-in duration-150">
+                  <span>Escribiendo</span>
+                  <span className="flex items-center gap-0.5 ml-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-bounce [animation-delay:-0.3s]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-bounce [animation-delay:-0.15s]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-bounce" />
+                  </span>
                 </span>
-              </span>
-            ) : (
-              <span className="text-[11px] text-[#00E676] flex items-center gap-1 font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-pulse" /> online
-              </span>
-            )}
+              ) : (
+                <span className="text-[11px] text-[#00E676] flex items-center gap-1 font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-pulse" /> online
+                </span>
+              )}
+
+              {/* Offline Cache Indicator Badge */}
+              <div className="relative">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowCacheInfo(!showCacheInfo);
+                  }}
+                  className="px-1.5 py-0.5 rounded-full bg-cyan-950/70 border border-cyan-500/40 hover:border-cyan-400 text-cyan-300 text-[10px] font-bold flex items-center gap-1 transition shadow-sm hover:scale-105"
+                  title="Historial en Caché Local disponible offline"
+                >
+                  <Zap className="w-2.5 h-2.5 text-cyan-400 fill-cyan-400" />
+                  <span>Caché</span>
+                  <span className="text-[9px] text-cyan-400/80 font-mono hidden sm:inline">({cachedMessagesCount})</span>
+                </button>
+
+                {showCacheInfo && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute left-0 top-6 w-60 p-3 bg-slate-950 border border-cyan-500/40 rounded-2xl shadow-2xl z-50 text-xs text-slate-200 animate-in fade-in zoom-in-95 duration-150"
+                  >
+                    <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                      <div className="flex items-center gap-1.5 font-bold text-cyan-300">
+                        <HardDrive className="w-3.5 h-3.5" />
+                        <span>Caché Local Offline</span>
+                      </div>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-cyan-900 text-cyan-200">
+                        Activo
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 pt-2 text-[11px]">
+                      <p className="text-slate-300">
+                        Historial completo guardado en tu dispositivo para carga instantánea <strong>(0ms)</strong>.
+                      </p>
+                      <div className="flex justify-between text-slate-400 pt-1 font-mono text-[10px]">
+                        <span>Mensajes en caché:</span>
+                        <strong className="text-[#00E676]">{cachedMessagesCount}</strong>
+                      </div>
+                      <div className="flex justify-between text-slate-400 font-mono text-[10px]">
+                        <span>Modo sin conexión:</span>
+                        <strong className="text-cyan-400">100% Listo</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>

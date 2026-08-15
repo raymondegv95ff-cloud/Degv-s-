@@ -6,7 +6,8 @@ interface CreateGroupChannelModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialMode?: "group" | "channel";
-  contacts: UserProfile[];
+  contacts?: UserProfile[];
+  allUsers?: UserProfile[];
   currentUser: UserProfile;
   onCreateRoom: (room: Room) => void;
 }
@@ -16,6 +17,7 @@ export const CreateGroupChannelModal: React.FC<CreateGroupChannelModalProps> = (
   onClose,
   initialMode = "group",
   contacts,
+  allUsers,
   currentUser,
   onCreateRoom,
 }) => {
@@ -33,7 +35,8 @@ export const CreateGroupChannelModal: React.FC<CreateGroupChannelModalProps> = (
   const isGroup = mode === "group";
 
   // Filter contacts excluding currentUser
-  const availableContacts = (contacts || []).filter(
+  const userList = contacts || allUsers || [];
+  const availableContacts = userList.filter(
     (u) => u && !u.isAi && u.id !== currentUser.id
   );
 

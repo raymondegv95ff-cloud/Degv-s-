@@ -1,0 +1,16 @@
+{
+  "twaManifest": "twa-manifest.json",
+  "jdkPath": "",
+  "androidSdkPath": "",
+  "signing": {
+    "keyStorePath": "./android.keystore",
+    "keyStorePassword": "password",
+    "keyAlias": "degvsmessenger",
+    "keyPassword": "password"
+  },
+  "features": {
+    "locationDelegation": true,
+    "playBilling": false,
+    "firstRun": false
+  }
+}

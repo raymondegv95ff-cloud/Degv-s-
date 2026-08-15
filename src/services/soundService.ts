@@ -24,7 +24,7 @@ export const SOUND_PRESETS: SoundPreset[] = [
   { id: "gentle_bell", name: "Campana Sutil", category: "message", description: "Acorde armónico de campana" },
 
   // NOTIFICATIONS
-  { id: "pop_neon", name: "Alerta Neón", category: "message", description: "Doble tono ascendente vibrante" },
+  { id: "pop_neon", name: "Alerta Neón", category: "notification", description: "Doble tono ascendente vibrante" },
   { id: "subtle_whisper", name: "Susurro Digital", category: "notification", description: "Sonido de notificación suave" },
   { id: "triple_tone", name: "Tritono Armónico", category: "notification", description: "Acorde de 3 notas do-mi-sol" },
   { id: "breeze_drop", name: "Gota de Agua", category: "notification", description: "Efecto acuático relajante" },

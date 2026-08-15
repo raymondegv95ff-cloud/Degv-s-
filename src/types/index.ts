@@ -10,6 +10,20 @@ export type FontOption = "sans" | "serif" | "mono" | "rounded" | "display";
 
 export type AccentColorOption = "emerald" | "cyan" | "purple" | "pink" | "amber" | "blue" | "red";
 
+export interface CacheStats {
+  totalRooms: number;
+  totalMessages: number;
+  lastUpdated: number;
+  isReady: boolean;
+  cacheSizeKb?: number;
+}
+
+export interface DayNightPaletteSettings {
+  autoTimePalette: boolean;
+  accentColorLight: AccentColorOption;
+  accentColorDark: AccentColorOption;
+}
+
 export interface UserProfile {
   id: string;
   username: string;
@@ -71,7 +85,7 @@ export interface Message {
   senderName: string;
   senderAvatar?: string;
   content: string;
-  type: "text" | "image" | "audio" | "file" | "poll" | "ai_image" | "sticker";
+  type: "text" | "image" | "audio" | "video" | "file" | "poll" | "ai_image" | "sticker";
   mediaUrl?: string;
   mediaName?: string;
   mediaSize?: string;
@@ -93,6 +107,7 @@ export interface Message {
   isEphemerous?: boolean;
   reactions?: Reaction[];
   translatedText?: string;
+  status?: "sending" | "sent" | "delivered" | "read" | "queued";
 }
 
 export interface Room {
@@ -193,3 +208,109 @@ export interface StickerPack {
   stickers: StickerItem[];
   isCustom?: boolean;
 }
+
+export type PlatformType = "web_pwa" | "android_capacitor" | "ionic_appflow" | "google_play_twa" | "termux_linux" | "github_antigravity";
+
+export interface AppflowConfig {
+  appId: string;
+  appName: string;
+  channel: string;
+  autoUpdateMethod: "background" | "auto" | "none";
+  maxVersions: number;
+  environment: "Production" | "Staging" | "Development";
+  buildStackAndroid: string;
+  nodeVersion: string;
+  nativeBuildType: "apk_debug" | "apk_release" | "aab_google_play";
+  destinations: {
+    googlePlay: boolean;
+    directApkDownload: boolean;
+  };
+}
+
+export interface PlatformHealthItem {
+  id: PlatformType;
+  name: string;
+  platformCategory: string;
+  iconName: string;
+  status: "synced" | "updating" | "pending_sync" | "optimized" | "error";
+  lastSyncTime: number;
+  version: string;
+  details: string;
+  capabilities: string[];
+  isAvailable: boolean;
+  verifiedFilesCount?: number;
+  checksum?: string;
+}
+
+export interface SystemDiagnostics {
+  serverStatus: "online" | "degraded" | "offline";
+  serverVersion: string;
+  nodeVersion: string;
+  uptimeSeconds: number;
+  memory: {
+    heapUsedMB: number;
+    heapTotalMB: number;
+    rssMB: number;
+  };
+  fileIntegrity: {
+    totalChecked: number;
+    validCount: number;
+    files: Array<{
+      path: string;
+      exists: boolean;
+      sizeBytes: number;
+      sha256?: string;
+    }>;
+  };
+  storageMetrics?: {
+    quotaMB: number;
+    usedMB: number;
+    percentUsed: number;
+  };
+}
+
+export interface AppflowDeployReceipt {
+  success: boolean;
+  deployId: string;
+  channel: string;
+  version: string;
+  timestamp: number;
+  filesVerified: number;
+  buildHash: string;
+  message: string;
+}
+
+export interface AppflowBuildReceipt {
+  success: boolean;
+  buildId: string;
+  buildType: "apk_debug" | "apk_release" | "aab_google_play";
+  timestamp: number;
+  manifestVerified: boolean;
+  gradleVerified: boolean;
+  outputArtifactName: string;
+  buildHash: string;
+  message: string;
+}
+
+export interface OptimizationResult {
+  cachesPurged: number;
+  indexedDbCompacted: boolean;
+  localStorageCompacted: boolean;
+  freedBytes: number;
+  latencyMs: number;
+  timestamp: number;
+  platformsSynced: PlatformType[];
+  systemDiagnostics?: SystemDiagnostics;
+}
+
+export interface CrossPlatformUpdateState {
+  isUpdateAvailable: boolean;
+  isUpdating: boolean;
+  currentVersion: string;
+  newVersion?: string;
+  lastOptimizedAt: number;
+  platformStatuses: Record<PlatformType, PlatformHealthItem>;
+  autoUpdateEnabled: boolean;
+  diagnostics?: SystemDiagnostics;
+}
+

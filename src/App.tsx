@@ -3,6 +3,8 @@ import { UserProfile, Room, Message, ThemeMode, BubbleStyle, LanguageCode, FontO
 import { storageService } from "./services/storageService";
 import { soundService } from "./services/soundService";
 import { notificationService } from "./services/notificationService";
+import { indexedDbQueueService } from "./services/indexedDbQueueService";
+import { sendMessage as sendFirestoreMessage, listenForMessages } from "./services/firebase";
 
 // Sidebar components
 import { SidebarHeader } from "./components/Sidebar/SidebarHeader";
@@ -27,12 +29,19 @@ import { WallpaperSelectorModal } from "./components/Modals/WallpaperSelectorMod
 import { E2EEModal } from "./components/Modals/E2EEModal";
 import { CallModal } from "./components/Modals/CallModal";
 import { AndroidGuideModal } from "./components/Modals/AndroidGuideModal";
+import { PublishDeployModal } from "./components/Modals/PublishDeployModal";
 import { RoomLockModal } from "./components/Modals/RoomLockModal";
 import { RoomLockSetupModal } from "./components/Modals/RoomLockSetupModal";
 import { BackupModal } from "./components/Modals/BackupModal";
 import { StarredMessagesModal } from "./components/Modals/StarredMessagesModal";
 import { ForwardModal } from "./components/Modals/ForwardModal";
 import { CreateGroupChannelModal } from "./components/Modals/CreateGroupChannelModal";
+import { SupportBotModal } from "./components/Modals/SupportBotModal";
+import { StorageCleanerModal } from "./components/Modals/StorageCleanerModal";
+import { PlatformUpdateModal } from "./components/Modals/PlatformUpdateModal";
+import { SmartReplyService } from "./services/smartReplyService";
+import { platformUpdateService } from "./services/platformUpdateService";
+import { CrossPlatformUpdateState } from "./types";
 
 
 export const App: React.FC = () => {
@@ -49,6 +58,9 @@ export const App: React.FC = () => {
   const [bubbleStyle, setBubbleStyle] = useState<BubbleStyle>(() => storageService.getSettings().bubbleStyle || "rounded");
   const [font, setFont] = useState<FontOption>(() => (storageService.getSettings().font as FontOption) || "sans");
   const [accentColor, setAccentColor] = useState<AccentColorOption>(() => (storageService.getSettings().accentColor as AccentColorOption) || "emerald");
+  const [autoTimePalette, setAutoTimePalette] = useState<boolean>(() => storageService.getAutoTimePalette());
+  const [accentColorLight, setAccentColorLight] = useState<AccentColorOption>(() => storageService.getAccentColorLight());
+  const [accentColorDark, setAccentColorDark] = useState<AccentColorOption>(() => storageService.getAccentColorDark());
   const [soundMuted, setSoundMuted] = useState(() => storageService.getSettings().soundMuted);
   const [language, setLanguage] = useState<LanguageCode>(() => storageService.getSettings().language || "es");
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(() => storageService.getReadReceiptsEnabled());
@@ -60,6 +72,7 @@ export const App: React.FC = () => {
   const [isNewChatOpen, setIsNewChatOpen] = useState(false);
   const [isVaultOpen, setIsVaultOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSupportBotOpen, setIsSupportBotOpen] = useState(false);
   const [isContactDrawerOpen, setIsContactDrawerOpen] = useState(false);
   const [isPollCreatorOpen, setIsPollCreatorOpen] = useState(false);
   const [isWallpaperOpen, setIsWallpaperOpen] = useState(false);
@@ -67,16 +80,97 @@ export const App: React.FC = () => {
   const [isCallOpen, setIsCallOpen] = useState(false);
   const [callIsVideo, setCallIsVideo] = useState(false);
   const [isAndroidGuideOpen, setIsAndroidGuideOpen] = useState(false);
+  const [isPublishDeployOpen, setIsPublishDeployOpen] = useState(false);
+  const [isPlatformUpdateOpen, setIsPlatformUpdateOpen] = useState(false);
+  const [platformUpdateState, setPlatformUpdateState] = useState<CrossPlatformUpdateState>(() =>
+    platformUpdateService.getState()
+  );
   const [unlockedRooms, setUnlockedRooms] = useState<Set<string>>(new Set());
   const [isRoomLockModalOpen, setIsRoomLockModalOpen] = useState(false);
   const [isLockSetupModalOpen, setIsLockSetupModalOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [isStorageCleanerOpen, setIsStorageCleanerOpen] = useState(false);
   const [isStarredModalOpen, setIsStarredModalOpen] = useState(false);
   const [forwardMessage, setForwardMessage] = useState<Message | null>(null);
 
   // Group & Channel Creation State
   const [isCreateGroupChannelOpen, setIsCreateGroupChannelOpen] = useState(false);
   const [createGroupChannelMode, setCreateGroupChannelMode] = useState<"group" | "channel">("group");
+
+  // Offline Connection Loss Detection & IndexedDB Queue State
+  const [isOnline, setIsOnline] = useState<boolean>(() => indexedDbQueueService.isOnline());
+  const [queuedOfflineCount, setQueuedOfflineCount] = useState<number>(0);
+  const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
+  const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
+
+  // Firestore Real-Time Message Listener
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const unsubscribe = listenForMessages(currentUser.id, (incomingMsg) => {
+      setMessagesMap((prev) => {
+        const roomMsgs = prev[incomingMsg.roomId] || [];
+        if (roomMsgs.some((m) => m.id === incomingMsg.id || (m.timestamp === incomingMsg.timestamp && m.content === incomingMsg.content))) {
+          return prev;
+        }
+        const updated = [...roomMsgs, incomingMsg];
+        storageService.saveRoomMessages(incomingMsg.roomId, updated);
+        return { ...prev, [incomingMsg.roomId]: updated };
+      });
+
+      if (incomingMsg.senderId !== currentUser.id) {
+        if (!soundMuted) soundService.playReceiveSound();
+        notificationService.sendNotification(
+          incomingMsg.senderName || "Nuevo mensaje",
+          incomingMsg.content,
+          incomingMsg.roomId,
+          "messages"
+        );
+      }
+    });
+
+    return () => unsubscribe();
+  }, [currentUser?.id, soundMuted]);
+
+  useEffect(() => {
+    platformUpdateService.init();
+    const unsubscribe = platformUpdateService.subscribe((st) => {
+      setPlatformUpdateState(st);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = indexedDbQueueService.subscribe((onlineStatus, count) => {
+      setIsOnline(onlineStatus);
+      setQueuedOfflineCount(count);
+      if (onlineStatus && count > 0) {
+        handleAutoSyncQueue();
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleAutoSyncQueue = async () => {
+    setIsSyncingQueue(true);
+    const result = await indexedDbQueueService.syncQueue(async (item) => {
+      const updatedMsg: Message = { ...item.message, status: "sent" };
+      setMessagesMap((prev) => {
+        const roomList = prev[item.roomId] || [];
+        const nextList = roomList.map((m) => (m.id === item.messageId ? updatedMsg : m));
+        storageService.saveRoomMessages(item.roomId, nextList);
+        return { ...prev, [item.roomId]: nextList };
+      });
+      return true;
+    });
+
+    setIsSyncingQueue(false);
+    if (result.syncedCount > 0) {
+      if (!soundMuted) soundService.playReceiveSound();
+      setSyncToastMessage(`¡Conexión restablecida! ${result.syncedCount} mensajes sincronizados desde IndexedDB.`);
+      setTimeout(() => setSyncToastMessage(null), 4000);
+    }
+  };
 
   // Star Message Handler
   const handleStarMessage = (messageId: string) => {
@@ -127,8 +221,16 @@ export const App: React.FC = () => {
     );
   };
 
+  // Call peer info state
+  const [activeCallPeer, setActiveCallPeer] = useState<{ id: string; name: string; avatarUrl?: string } | null>(null);
+
   // Trigger call and save call log
   const handleStartCall = (peerId: string, isVideo: boolean, peerName?: string) => {
+    const targetRoom = rooms.find((r) => r.id === peerId || r.participants?.some((p) => p.id === peerId));
+    const finalName = peerName || targetRoom?.name || activeRoom?.name || "Contacto";
+    const finalAvatar = targetRoom?.avatarUrl || activeRoom?.avatarUrl;
+
+    setActiveCallPeer({ id: peerId, name: finalName, avatarUrl: finalAvatar });
     setCallIsVideo(isVideo);
     setIsCallOpen(true);
 
@@ -136,8 +238,8 @@ export const App: React.FC = () => {
     storageService.saveCallLog({
       id: `call_${Date.now()}`,
       peerId,
-      peerName: peerName || activeRoom?.name || "Contacto",
-      peerAvatar: activeRoom?.avatarUrl,
+      peerName: finalName,
+      peerAvatar: finalAvatar,
       type: isVideo ? "video" : "voice",
       direction: "outgoing",
       timestamp: Date.now(),
@@ -162,6 +264,28 @@ export const App: React.FC = () => {
   useEffect(() => {
     notificationService.requestPermission();
   }, []);
+
+  // Dynamic Day/Night Automatic Palette Engine
+  useEffect(() => {
+    const applyDynamicPalette = () => {
+      if (autoTimePalette) {
+        const calculated = storageService.calculateTimeOfDayPalette();
+        if (calculated.theme !== theme) {
+          setTheme(calculated.theme);
+        }
+        if (calculated.accentColor !== accentColor) {
+          setAccentColor(calculated.accentColor);
+        }
+        storageService.applyAccentColorToCss(calculated.accentColor);
+      } else {
+        storageService.applyAccentColorToCss(accentColor);
+      }
+    };
+
+    applyDynamicPalette();
+    const interval = setInterval(applyDynamicPalette, 30000); // check periodically every 30s
+    return () => clearInterval(interval);
+  }, [autoTimePalette, accentColorLight, accentColorDark, accentColor, theme]);
 
   // Sync theme & font changes to html/body
   useEffect(() => {
@@ -334,38 +458,38 @@ export const App: React.FC = () => {
     storageService.saveDraft(activeChatId, text);
   };
 
-  // Smart Reply Suggestions Generator
+  // Smart Reply Suggestions Generator with Entity Detection
   const getSmartReplySuggestions = (): string[] => {
     if (!activeMessages.length) return ["¡Hola! 👋", "¿Cómo estás?", "¡Genial! 🚀"];
     const lastMsg = activeMessages[activeMessages.length - 1];
     if (lastMsg.senderId === currentUser?.id) return [];
 
-    const text = lastMsg.content.toLowerCase();
-    if (text.includes("hola") || text.includes("buenos días")) return ["¡Hola! ¿Cómo vas?", "¡Saludos! 👋", "¡Hola! Todo bien"];
-    if (text.includes("reunión") || text.includes("cita")) return ["Confirmado 👍", "Allí estaré", "Envíame el enlace"];
-    if (text.includes("gracias")) return ["¡De nada! 😊", "Un placer", "A la orden"];
-    return ["¡Excelente!", "Entendido 👍", "Déjame revisarlo"];
+    const analysis = SmartReplyService.analyzeMessage(lastMsg, activeRoom?.name || "Chat");
+    return analysis.suggestions;
   };
 
   // Send Message Handler
   const handleSendMessage = async (
     content: string,
-    type: "text" | "image" | "audio" | "file" = "text",
+    type: "text" | "image" | "audio" | "file" | "sticker" = "text",
     mediaUrl?: string
   ) => {
     if (!activeChatId || !currentUser) return;
+
+    const isCurrentlyOnline = indexedDbQueueService.isOnline();
 
     const newMsg: Message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       roomId: activeChatId,
       senderId: currentUser.id,
       senderName: `${currentUser.firstName} ${currentUser.lastName}`,
-      type,
+      type: type as any,
       content,
       mediaUrl,
       createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       timestamp: Date.now(),
       isRead: true,
+      status: isCurrentlyOnline ? "sent" : "queued",
       replyToSnippet: replyToMessage
         ? {
             id: replyToMessage.id,
@@ -374,6 +498,39 @@ export const App: React.FC = () => {
           }
         : undefined,
     };
+
+    // If online, dispatch message to Firebase Firestore in real-time
+    if (isCurrentlyOnline && activeRoom) {
+      const otherParticipant = activeRoom.participants?.find((p) => p && p.id !== currentUser.id);
+      const targetReceiverId = otherParticipant ? otherParticipant.id : "usr_all";
+
+      sendFirestoreMessage(currentUser.id, targetReceiverId, content, {
+        id: newMsg.id,
+        roomId: activeChatId,
+        senderName: `${currentUser.firstName || "Yo"} ${currentUser.lastName || ""}`.trim(),
+        senderAvatar: currentUser.avatarUrl,
+        type: newMsg.type,
+        mediaUrl: newMsg.mediaUrl,
+        poll: newMsg.poll,
+      }).catch((err) => {
+        console.warn("Firestore send warning:", err);
+      });
+    }
+
+    // If offline, save in IndexedDB queue
+    if (!isCurrentlyOnline) {
+      indexedDbQueueService.enqueueMessage(activeChatId, newMsg);
+    }
+
+    // Record stats for Recharts
+    try {
+      const todayKey = new Date().toISOString().split("T")[0];
+      const raw = localStorage.getItem("degvs_messenger_daily_stats") || "{}";
+      const statsObj = JSON.parse(raw);
+      if (!statsObj[todayKey]) statsObj[todayKey] = { messages: 0, usageMinutes: 0 };
+      statsObj[todayKey].messages = (statsObj[todayKey].messages || 0) + 1;
+      localStorage.setItem("degvs_messenger_daily_stats", JSON.stringify(statsObj));
+    } catch {}
 
     // Play send audio sound
     if (!soundMuted) soundService.playSendSound();
@@ -393,7 +550,7 @@ export const App: React.FC = () => {
         r.id === activeChatId
           ? {
               ...r,
-              lastMessage: type === "image" ? "📷 Imagen" : type === "audio" ? "🎵 Nota de voz" : content,
+              lastMessage: type === "image" ? "📷 Imagen" : type === "sticker" ? "⭐ Sticker" : type === "audio" ? "🎵 Nota de voz" : content,
               lastMessageTime: nowTime,
               draftText: "",
             }
@@ -401,90 +558,9 @@ export const App: React.FC = () => {
       )
     );
 
-    // If active room is Degv's AI or prompt starts with /imagine
-    if (activeRoom?.isAiChat || content.startsWith("/imagine")) {
+    // Only handle AI response if the user is explicitly in the dedicated Degv's AI chat or typing /imagine
+    if (isCurrentlyOnline && (activeRoom?.isAiChat || content.startsWith("/imagine"))) {
       handleAiResponse(activeChatId, content, updatedMessages);
-    } else if (activeRoom && !activeRoom.isGroup && !activeRoom.isChannel && !activeRoom.isSecretVault) {
-      // 1-on-1 Contact Chat Auto Reply
-      const contact = activeRoom.participants?.[0];
-      if (contact && contact.id !== currentUser.id) {
-        handleContactAutoReply(activeChatId, contact, content, updatedMessages);
-      }
-    }
-  };
-
-  // Contact Auto-Reply Handler
-  const handleContactAutoReply = async (
-    roomId: string,
-    contact: UserProfile,
-    userPrompt: string,
-    history: Message[]
-  ) => {
-    try {
-      setTimeout(async () => {
-        let replyText = "";
-        try {
-          const res = await fetch("/api/ai/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              prompt: `Actúa como ${contact.firstName} ${contact.lastName || ""}. Responde en español de forma natural, realista, amigable y muy breve (1 o 2 frases) al mensaje recibido: "${userPrompt}". No uses comillas.`,
-              history: history.slice(-4),
-            }),
-          });
-          const data = await res.json();
-          if (data && data.text) {
-            replyText = data.text.trim();
-          }
-        } catch {}
-
-        if (!replyText) {
-          const defaults = [
-            "¡Hola! ¿Cómo estás? Dime en qué te puedo ayudar 👍",
-            "¡Perfecto! Recibido con éxito.",
-            "¡Buenísimo! Te aviso cualquier novedad 😊",
-            "¡Excelente! Quedamos así.",
-          ];
-          replyText = defaults[Math.floor(Math.random() * defaults.length)];
-        }
-
-        const replyMsg: Message = {
-          id: `msg_resp_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
-          roomId,
-          senderId: contact.id,
-          senderName: `${contact.firstName} ${contact.lastName || ""}`.trim(),
-          type: "text",
-          content: replyText,
-          createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          timestamp: Date.now(),
-          isRead: true,
-        };
-
-        if (!soundMuted) soundService.playReceiveSound();
-
-        setMessagesMap((prev) => ({
-          ...prev,
-          [roomId]: [...(prev[roomId] || []), replyMsg],
-        }));
-        storageService.saveMessage(roomId, replyMsg);
-
-        notificationService.sendNotification(
-          replyMsg.senderName,
-          replyText,
-          roomId,
-          "messages"
-        );
-
-        setRooms((prev) =>
-          prev.map((r) =>
-            r.id === roomId
-              ? { ...r, lastMessage: replyText, lastMessageTime: replyMsg.createdAt }
-              : r
-          )
-        );
-      }, 1200);
-    } catch (err) {
-      console.error("Error in contact auto-reply:", err);
     }
   };
 
@@ -743,13 +819,17 @@ export const App: React.FC = () => {
           onOpenVault={() => setIsVaultOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenAndroidGuide={() => setIsAndroidGuideOpen(true)}
+          onOpenPublishDeploy={() => setIsPublishDeployOpen(true)}
+          onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
+          isUpdateAvailable={platformUpdateState.isUpdateAvailable}
+          isOptimizing={platformUpdateState.isUpdating}
           theme={theme}
           onToggleTheme={() => {
             const next = theme === "dark" ? "light" : "dark";
             setTheme(next);
             storageService.saveSettings({ theme: next });
           }}
-          serverStatus="online"
+          serverStatus={isOnline ? "online" : "offline"}
         />
 
         {/* Global Search Bar */}
@@ -877,10 +957,47 @@ export const App: React.FC = () => {
 
       {/* RIGHT MAIN CHAT AREA COLUMN */}
       <div
-        className={`flex-1 flex flex-col h-full bg-[#050505] transition-all ${
+        className={`flex-1 flex flex-col h-full bg-[#050505] transition-all relative overflow-hidden ${
           !showMobileChat && activeCategory !== "status" ? "hidden md:flex" : "flex"
         }`}
       >
+        {/* Offline Connection Loss Detection & IndexedDB Queue Banner */}
+        {!isOnline && (
+          <div className="bg-amber-950/90 border-b border-amber-500/40 px-4 py-2 text-amber-200 text-xs font-bold flex items-center justify-between z-30 shadow-lg backdrop-blur-md shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
+              <span>Modo Sin Conexión:</span>
+              <span className="text-[11px] text-amber-300 font-normal">
+                {queuedOfflineCount > 0
+                  ? `${queuedOfflineCount} mensaje(s) guardado(s) en cola local (IndexedDB) esperando reconexión.`
+                  : "Los mensajes enviados se guardarán en IndexedDB y se sincronizarán al reconectar."}
+              </span>
+            </div>
+            <button
+              onClick={() => handleAutoSyncQueue()}
+              disabled={isSyncingQueue}
+              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black rounded-xl transition shadow active:scale-95 shrink-0"
+            >
+              {isSyncingQueue ? "Sincronizando..." : "Reintentar Sincronización"}
+            </button>
+          </div>
+        )}
+
+        {/* Sync Toast Notification */}
+        {syncToastMessage && (
+          <div className="bg-emerald-950/90 border-b border-emerald-500/40 px-4 py-2 text-emerald-300 text-xs font-extrabold flex items-center justify-between z-30 shadow-lg backdrop-blur-md animate-in slide-in-from-top duration-200 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span>{syncToastMessage}</span>
+            </div>
+            <button
+              onClick={() => setSyncToastMessage(null)}
+              className="text-emerald-400 hover:text-emerald-200 text-xs font-bold px-2 py-0.5"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         {activeCategory === "status" ? (
           <StatusView
             currentUser={
@@ -1142,6 +1259,22 @@ export const App: React.FC = () => {
         onAccentColorChange={(c) => {
           setAccentColor(c);
           storageService.saveSettings({ accentColor: c });
+          storageService.applyAccentColorToCss(c);
+        }}
+        autoTimePalette={autoTimePalette}
+        onAutoTimePaletteChange={(enabled) => {
+          setAutoTimePalette(enabled);
+          storageService.setAutoTimePalette(enabled);
+        }}
+        accentColorLight={accentColorLight}
+        onAccentColorLightChange={(c) => {
+          setAccentColorLight(c);
+          storageService.setAccentColorLight(c);
+        }}
+        accentColorDark={accentColorDark}
+        onAccentColorDarkChange={(c) => {
+          setAccentColorDark(c);
+          storageService.setAccentColorDark(c);
         }}
         soundMuted={soundMuted}
         onToggleSound={() => {
@@ -1158,13 +1291,39 @@ export const App: React.FC = () => {
         onToggleReadReceipts={handleToggleReadReceipts}
         onUpdateAvatar={handleUpdateAvatar}
         onOpenAndroidGuide={() => setIsAndroidGuideOpen(true)}
+        onOpenPublishDeploy={() => setIsPublishDeployOpen(true)}
+        onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
+        onOpenSupportBot={() => setIsSupportBotOpen(true)}
+        onOpenStorageCleaner={() => setIsStorageCleanerOpen(true)}
         onLogout={() => {
           storageService.saveUser(null);
           setCurrentUser(null);
           setIsSettingsOpen(false);
           setIsAuthModalOpen(true);
         }}
+      />
+
+      {/* Space Cleaner (Limpiador de Espacio) Modal */}
+      <StorageCleanerModal
+        isOpen={isStorageCleanerOpen}
+        onClose={() => setIsStorageCleanerOpen(false)}
+        onStorageCleared={() => {
+          const loadedRooms = storageService.getRooms();
+          setRooms(loadedRooms);
+          const map: Record<string, Message[]> = {};
+          loadedRooms.forEach((r) => {
+            map[r.id] = storageService.getMessages(r.id);
+          });
+          setMessagesMap(map);
+        }}
+      />
+
+      {/* Specialized Technical Support Bot Modal */}
+      <SupportBotModal
+        isOpen={isSupportBotOpen}
+        onClose={() => setIsSupportBotOpen(false)}
+        currentUser={currentUser || undefined}
       />
 
       <BackupModal
@@ -1194,7 +1353,9 @@ export const App: React.FC = () => {
         currentWallpaper={activeRoom?.wallpaper}
         onSelectWallpaper={(preset) => {
           if (!activeChatId) return;
-          setRooms((prev) => prev.map((r) => (r.id === activeChatId ? { ...r, wallpaper: preset } : r)));
+          const updatedRooms = rooms.map((r) => (r.id === activeChatId ? { ...r, wallpaper: preset } : r));
+          setRooms(updatedRooms);
+          storageService.saveRooms(updatedRooms);
         }}
       />
 
@@ -1206,9 +1367,12 @@ export const App: React.FC = () => {
 
       <CallModal
         isOpen={isCallOpen}
-        onClose={() => setIsCallOpen(false)}
-        contactName={activeRoom?.name || "Contacto"}
-        avatarUrl={activeRoom?.avatarUrl}
+        onClose={() => {
+          setIsCallOpen(false);
+          setActiveCallPeer(null);
+        }}
+        contactName={activeCallPeer?.name || activeRoom?.name || "Contacto"}
+        avatarUrl={activeCallPeer?.avatarUrl || activeRoom?.avatarUrl}
         isVideo={callIsVideo}
       />
 
@@ -1216,6 +1380,45 @@ export const App: React.FC = () => {
         isOpen={isAndroidGuideOpen}
         onClose={() => setIsAndroidGuideOpen(false)}
       />
+
+      <PublishDeployModal
+        isOpen={isPublishDeployOpen}
+        onClose={() => setIsPublishDeployOpen(false)}
+        onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
+      />
+
+      {/* Universal Cross-Platform Update & Optimizer Modal */}
+      <PlatformUpdateModal
+        isOpen={isPlatformUpdateOpen}
+        onClose={() => setIsPlatformUpdateOpen(false)}
+        onOpenPublishDeploy={() => setIsPublishDeployOpen(true)}
+      />
+
+      {/* Floating Cyber Update Notification Toast when new build/SW is detected */}
+      {platformUpdateState.isUpdateAvailable && (
+        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-3xl bg-slate-950/95 border-2 border-cyan-400 text-white shadow-[0_0_30px_rgba(0,229,255,0.4)] backdrop-blur-xl flex items-center gap-3.5 animate-in slide-in-from-bottom-5 duration-300 max-w-md">
+          <div className="p-2.5 rounded-2xl bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shrink-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping inline-block" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-xs text-cyan-300 flex items-center gap-1.5">
+              <span>¡Nueva versión disponible!</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-200 border border-cyan-500/40">
+                {platformUpdateState.newVersion || "v2.5.0"}
+              </span>
+            </p>
+            <p className="text-[11px] text-slate-300 mt-0.5 truncate">
+              Actualiza y optimiza Web, PWA, Android APK, TWA y Termux.
+            </p>
+          </div>
+          <button
+            onClick={() => setIsPlatformUpdateOpen(true)}
+            className="px-3.5 py-2 rounded-2xl bg-[#00E676] hover:bg-[#00c864] text-slate-950 font-black text-xs shadow-lg shadow-[#00E676]/30 transition shrink-0 active:scale-95"
+          >
+            Actualizar
+          </button>
+        </div>
+      )}
 
       <StarredMessagesModal
         isOpen={isStarredModalOpen}

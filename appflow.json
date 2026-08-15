@@ -1,0 +1,28 @@
+{
+  "appId": "com.degv.messenger",
+  "appName": "Degv's Messenger",
+  "version": "2.5.0",
+  "buildStack": {
+    "android": "Android - 2024.11",
+    "web": "Linux - 2024.11"
+  },
+  "nodeVersion": "20.x",
+  "webDir": "dist",
+  "buildScripts": {
+    "web": "npm run build",
+    "native": "npm run appflow:sync"
+  },
+  "liveUpdates": {
+    "enabled": true,
+    "channel": "Production",
+    "autoUpdateMethod": "background",
+    "maxVersions": 2
+  },
+  "android": {
+    "minSdkVersion": 24,
+    "targetSdkVersion": 34,
+    "compileSdkVersion": 34,
+    "buildType": "apk",
+    "gradleArgs": ["assembleDebug", "bundleRelease"]
+  }
+}

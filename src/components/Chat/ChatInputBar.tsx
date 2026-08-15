@@ -1,7 +1,9 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { Message, Room } from "../../types";
 import { ImageFilterModal } from "../Modals/ImageFilterModal";
 import { StickerPickerPanel } from "./StickerPickerPanel";
+import { CalendarEventModal } from "../Modals/CalendarEventModal";
+import { SmartReplyService, DetectedEntity } from "../../services/smartReplyService";
 import {
   Smile,
   Paperclip,
@@ -21,6 +23,13 @@ import {
   Loader2,
   MicOff,
   AudioLines,
+  Calendar,
+  MapPin,
+  Phone,
+  Mail,
+  ExternalLink,
+  CalendarPlus,
+  Compass,
 } from "lucide-react";
 
 interface ChatInputBarProps {
@@ -70,8 +79,34 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
 
+  // Contextual Smart Actions & Calendar Modal State
+  const [selectedCalendarEntity, setSelectedCalendarEntity] = useState<DetectedEntity | null>(null);
+  const [showCalendarModal, setShowCalendarModal] = useState<boolean>(false);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<any>(null);
+
+  // Analyze latest message for entity detection (dates, locations, contacts)
+  const lastMessage = useMemo(() => {
+    if (!messages || messages.length === 0) return null;
+    return messages[messages.length - 1];
+  }, [messages]);
+
+  const smartAnalysis = useMemo(() => {
+    return SmartReplyService.analyzeMessage(lastMessage, chatName);
+  }, [lastMessage, chatName]);
+
+  // Combined smart suggestions (prioritize entity-aware suggestions)
+  const combinedSuggestions = useMemo(() => {
+    const set = new Set<string>();
+    if (smartAnalysis && smartAnalysis.suggestions) {
+      smartAnalysis.suggestions.forEach((s) => set.add(s));
+    }
+    if (smartReplySuggestions) {
+      smartReplySuggestions.forEach((s) => set.add(s));
+    }
+    return Array.from(set).slice(0, 5);
+  }, [smartAnalysis, smartReplySuggestions]);
 
   // Auto-focus input when activeChatId changes
   useEffect(() => {
@@ -262,8 +297,81 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
 
   const commonEmojis = ["😊", "🔥", "❤️", "👍", "🚀", "🎉", "⚡", "🤖", "😎", "🙏", "💯", "✨"];
 
+  const handleEntityAction = (entity: DetectedEntity) => {
+    if (entity.actionType === "calendar") {
+      setSelectedCalendarEntity(entity);
+      setShowCalendarModal(true);
+    } else if (entity.actionType === "maps") {
+      if (entity.metadata?.mapsUrl) {
+        window.open(entity.metadata.mapsUrl, "_blank");
+      }
+    } else if (entity.actionType === "call") {
+      if (entity.metadata?.phoneNumber) {
+        window.open(`tel:${entity.metadata.phoneNumber}`);
+      }
+    } else if (entity.actionType === "email") {
+      if (entity.metadata?.emailAddress) {
+        window.open(`mailto:${entity.metadata.emailAddress}`);
+      }
+    } else if (entity.actionType === "link") {
+      if (entity.metadata?.targetUrl) {
+        window.open(entity.metadata.targetUrl, "_blank");
+      }
+    }
+  };
+
   return (
     <div className="p-4 md:p-6 bg-[#0a0a0a]/90 backdrop-blur-md border-t border-white/5 relative z-20">
+      {/* Contextual Smart Action Bar (Detected Entities: Dates/Calendars, Locations/Maps, etc.) */}
+      {smartAnalysis.hasActionableEntities && !isRecordingVoice && !voicePreviewUrl && (
+        <div className="flex items-center gap-2 mb-2.5 overflow-x-auto no-scrollbar pb-0.5 animate-in slide-in-from-bottom duration-200">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-[10px] font-black uppercase text-[#00E676] shrink-0">
+            <Sparkles className="w-3 h-3 text-[#00E676] animate-pulse" />
+            <span>Acciones Inteligentes</span>
+          </div>
+
+          {smartAnalysis.entities.map((entity, idx) => {
+            const isCal = entity.actionType === "calendar";
+            const isMap = entity.actionType === "maps";
+            const isCall = entity.actionType === "call";
+            const isEmail = entity.actionType === "email";
+
+            return (
+              <button
+                key={`ent_${idx}`}
+                onClick={() => handleEntityAction(entity)}
+                className={`py-1 px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition active:scale-95 shadow-sm border ${
+                  isCal
+                    ? "bg-emerald-500/20 text-[#00E676] border-emerald-500/50 hover:bg-emerald-500/30"
+                    : isMap
+                    ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/50 hover:bg-cyan-500/30"
+                    : isCall
+                    ? "bg-amber-500/20 text-amber-300 border-amber-500/50 hover:bg-amber-500/30"
+                    : isEmail
+                    ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/50 hover:bg-indigo-500/30"
+                    : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                }`}
+                title={`Acción sugerida para: "${entity.displayValue}"`}
+              >
+                {isCal ? (
+                  <CalendarPlus className="w-3.5 h-3.5" />
+                ) : isMap ? (
+                  <Compass className="w-3.5 h-3.5" />
+                ) : isCall ? (
+                  <Phone className="w-3.5 h-3.5" />
+                ) : isEmail ? (
+                  <Mail className="w-3.5 h-3.5" />
+                ) : (
+                  <ExternalLink className="w-3.5 h-3.5" />
+                )}
+                <span>{entity.actionLabel}:</span>
+                <span className="font-normal opacity-90 truncate max-w-[150px]">{entity.displayValue}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Top Bar: AI Response Generator + Smart Suggestions */}
       <div className="flex items-center gap-2 mb-3 overflow-x-auto no-scrollbar pb-0.5">
         <button
@@ -301,14 +409,14 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
         ))}
 
         {/* Smart Reply Suggestions */}
-        {smartReplySuggestions.length > 0 &&
+        {combinedSuggestions.length > 0 &&
           !isRecordingVoice &&
           !voicePreviewUrl &&
-          smartReplySuggestions.map((sug, idx) => (
+          combinedSuggestions.map((sug, idx) => (
             <button
               key={idx}
               onClick={() => onSelectSmartReply(sug)}
-              className="px-3 py-1 rounded-xl text-xs font-medium bg-white/5 hover:bg-[#00E676]/20 hover:text-[#00E676] text-slate-300 border border-white/10 transition whitespace-nowrap shrink-0"
+              className="px-3 py-1 rounded-xl text-xs font-medium bg-white/5 hover:bg-[#00E676]/20 hover:text-[#00E676] text-slate-300 border border-white/10 transition whitespace-nowrap shrink-0 active:scale-95"
             >
               {sug}
             </button>
@@ -604,6 +712,17 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
           )}
         </div>
       )}
+
+      {/* Calendar Event Quick Creator Modal */}
+      <CalendarEventModal
+        isOpen={showCalendarModal}
+        onClose={() => setShowCalendarModal(false)}
+        entity={selectedCalendarEntity}
+        chatName={chatName}
+        onConfirmReply={(replyText) => {
+          onSendMessage(replyText, "text");
+        }}
+      />
     </div>
   );
 };

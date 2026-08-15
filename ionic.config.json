@@ -1,0 +1,22 @@
+{
+  "name": "Degv's Messenger",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "custom",
+  "id": "com.degv.messenger",
+  "appflow": {
+    "app_id": "com.degv.messenger",
+    "webDir": "dist",
+    "environments": {
+      "production": {
+        "channel": "Production",
+        "autoUpdateMethod": "background"
+      },
+      "staging": {
+        "channel": "Staging",
+        "autoUpdateMethod": "background"
+      }
+    }
+  }
+}

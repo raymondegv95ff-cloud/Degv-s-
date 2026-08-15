@@ -1,0 +1,57 @@
+{
+  "$schema": "https://ai.studio/schemas/antigravity-config.json",
+  "appId": "b0c3d30c-f3ca-4efc-bfbe-c2034dccf1f2",
+  "name": "Degv's Messenger",
+  "version": "1.0.0",
+  "engine": "Google Antigravity & Gemini 2.5/3.7",
+  "platform": "fullstack-vite-express",
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ],
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "targets": {
+    "web": {
+      "port": 3000,
+      "host": "0.0.0.0",
+      "pwa": true
+    },
+    "termux": {
+      "entryScript": "./termux-start.sh",
+      "installerScript": "./termux-install.sh",
+      "permissions": [
+        "termux-setup-storage",
+        "termux-wake-lock",
+        "termux-notification",
+        "termux-api"
+      ]
+    },
+    "capacitor": {
+      "appId": "com.degv.messenger",
+      "appName": "Degv's Messenger",
+      "config": "capacitor.config.json",
+      "manifest": "android/app/src/main/AndroidManifest.xml",
+      "setupScript": "./setup-capacitor.sh"
+    },
+    "bubblewrap": {
+      "packageId": "com.degv.messenger.twa",
+      "manifest": "twa-manifest.json",
+      "config": "bubblewrap.json",
+      "buildScript": "./build-twa.sh"
+    },
+    "github": {
+      "ci": ".github/workflows/build-apk.yml",
+      "pages": ".github/workflows/deploy-pages.yml",
+      "syncScript": "./sync-github.sh"
+    }
+  },
+  "ai": {
+    "defaultModel": "gemini-2.5-flash",
+    "interactionsApi": true,
+    "multimodalSupport": true,
+    "systemInstructions": "Degv's Messenger Cyber Assistant"
+  }
+}

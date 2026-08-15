@@ -18,6 +18,7 @@ import {
   X,
   ZoomIn,
   Download,
+  Clock,
 } from "lucide-react";
 
 interface MessageBubbleProps {
@@ -381,7 +382,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
           {isMe && (
             <span>
-              {message.isRead && readReceiptsEnabled !== false ? (
+              {message.status === "queued" || message.status === "sending" ? (
+                <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" title="En cola local (IndexedDB) - esperando conexión" />
+              ) : message.isRead && readReceiptsEnabled !== false ? (
                 <CheckCheck className="w-3.5 h-3.5 text-[#00E676]" />
               ) : message.isRead ? (
                 <CheckCheck className="w-3.5 h-3.5 text-slate-400" />

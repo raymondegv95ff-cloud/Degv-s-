@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Phone, Video, Mic, MicOff, VideoOff, PhoneOff, Volume2 } from "lucide-react";
+import { soundService } from "../../services/soundService";
 
 interface CallModalProps {
   isOpen: boolean;
@@ -25,9 +26,16 @@ export const CallModal: React.FC<CallModalProps> = ({
     if (isOpen) {
       setCallDuration(0);
       timer = setInterval(() => setCallDuration((prev) => prev + 1), 1000);
+      
+      // Play initial ringing sound customized by user
+      if (isVideo) {
+        soundService.playVideoCallRingSound();
+      } else {
+        soundService.playCallRingSound();
+      }
     }
     return () => clearInterval(timer);
-  }, [isOpen]);
+  }, [isOpen, isVideo]);
 
   if (!isOpen) return null;
 

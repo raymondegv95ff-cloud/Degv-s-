@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow read/write for messages and rooms in real-time chat
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

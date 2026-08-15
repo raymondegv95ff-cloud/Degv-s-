@@ -1,4 +1,4 @@
-import { Room, Message, UserProfile, ThemeMode, BubbleStyle, NotificationSettings, UserStatusItem } from "../types";
+import { Room, Message, UserProfile, ThemeMode, BubbleStyle, NotificationSettings, UserStatusItem, SoundCustomizationSettings, CustomSoundItem, AccentColorOption, CacheStats, DayNightPaletteSettings } from "../types";
 import { currentUserMock, initialMockRooms, initialMockMessages, mockUsersList } from "./mockData";
 
 const STORAGE_KEYS = {
@@ -18,20 +18,35 @@ const STORAGE_KEYS = {
   READ_RECEIPTS: "degvs_messenger_read_receipts",
   FONT: "degvs_messenger_font",
   ACCENT_COLOR: "degvs_messenger_accent_color",
+  AUTO_TIME_PALETTE: "degvs_messenger_auto_time_palette",
+  ACCENT_COLOR_LIGHT: "degvs_messenger_accent_color_light",
+  ACCENT_COLOR_DARK: "degvs_messenger_accent_color_dark",
   CONTACTS: "degvs_messenger_contacts",
   CALL_LOGS: "degvs_messenger_call_logs",
   CUSTOM_STICKERS: "degvs_messenger_custom_stickers",
+  CACHE_METADATA: "degvs_messenger_cache_metadata",
 };
 
 
 // Broadcast channel for multi-tab real-time sync
 const syncChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("degvs_messenger_sync") : null;
 
+export const ACCENT_COLOR_MAP: Record<AccentColorOption, { name: string; hex: string; rgb: string; border: string; glow: string }> = {
+  emerald: { name: "Verde Neón", hex: "#00E676", rgb: "0, 230, 118", border: "#00E676", glow: "rgba(0, 230, 118, 0.4)" },
+  cyan: { name: "Cian Ciber", hex: "#00E5FF", rgb: "0, 229, 255", border: "#00E5FF", glow: "rgba(0, 229, 255, 0.4)" },
+  purple: { name: "Púrpura Neón", hex: "#A855F7", rgb: "168, 85, 247", border: "#A855F7", glow: "rgba(168, 85, 247, 0.4)" },
+  pink: { name: "Rosa Ciber", hex: "#EC4899", rgb: "236, 72, 153", border: "#EC4899", glow: "rgba(236, 72, 153, 0.4)" },
+  amber: { name: "Dorado Cálido", hex: "#F59E0B", rgb: "245, 158, 11", border: "#F59E0B", glow: "rgba(245, 158, 11, 0.4)" },
+  blue: { name: "Azul Eléctrico", hex: "#3B82F6", rgb: "59, 130, 246", border: "#3B82F6", glow: "rgba(59, 130, 246, 0.4)" },
+  red: { name: "Rojo Neón", hex: "#FF2A6D", rgb: "255, 42, 109", border: "#FF2A6D", glow: "rgba(255, 42, 109, 0.4)" },
+};
+
 export class StorageService {
   private static roomsCache: Room[] | null = null;
   private static messagesCache: Record<string, Message[]> | null = null;
+  private static lastCacheSync: number = Date.now();
 
-  // Initialize storage defaults if empty
+  // Initialize storage defaults if empty and warm up memory cache
   public static init() {
     if (!localStorage.getItem(STORAGE_KEYS.USER)) {
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(currentUserMock));
@@ -42,6 +57,71 @@ export class StorageService {
     if (!localStorage.getItem(STORAGE_KEYS.MESSAGES)) {
       localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(initialMockMessages));
     }
+    if (!localStorage.getItem(STORAGE_KEYS.AUTO_TIME_PALETTE)) {
+      localStorage.setItem(STORAGE_KEYS.AUTO_TIME_PALETTE, "true");
+    }
+    if (!localStorage.getItem(STORAGE_KEYS.ACCENT_COLOR_LIGHT)) {
+      localStorage.setItem(STORAGE_KEYS.ACCENT_COLOR_LIGHT, "cyan");
+    }
+    if (!localStorage.getItem(STORAGE_KEYS.ACCENT_COLOR_DARK)) {
+      localStorage.setItem(STORAGE_KEYS.ACCENT_COLOR_DARK, "emerald");
+    }
+
+    // Warm up in-memory cache for instant zero-latency access
+    this.warmCache();
+  }
+
+  private static warmCache() {
+    try {
+      if (!this.roomsCache) {
+        const roomsRaw = localStorage.getItem(STORAGE_KEYS.ROOMS);
+        this.roomsCache = roomsRaw ? JSON.parse(roomsRaw) : initialMockRooms;
+      }
+      if (!this.messagesCache) {
+        const msgsRaw = localStorage.getItem(STORAGE_KEYS.MESSAGES);
+        this.messagesCache = msgsRaw ? JSON.parse(msgsRaw) : initialMockMessages;
+      }
+      this.lastCacheSync = Date.now();
+    } catch {
+      this.roomsCache = initialMockRooms;
+      this.messagesCache = initialMockMessages;
+    }
+  }
+
+  // Instant Offline Cache Metrics
+  public static getCacheStats(): CacheStats {
+    this.warmCache();
+    const rooms = this.getRooms();
+    const allMsgs = this.getAllMessagesMap();
+    let totalMessages = 0;
+    Object.values(allMsgs).forEach((list) => {
+      totalMessages += Array.isArray(list) ? list.length : 0;
+    });
+
+    let sizeKb = 0;
+    try {
+      const msgsRaw = localStorage.getItem(STORAGE_KEYS.MESSAGES) || "";
+      const roomsRaw = localStorage.getItem(STORAGE_KEYS.ROOMS) || "";
+      sizeKb = Math.round((msgsRaw.length + roomsRaw.length) / 1024);
+    } catch {}
+
+    return {
+      totalRooms: rooms.length,
+      totalMessages,
+      lastUpdated: this.lastCacheSync,
+      isReady: true,
+      cacheSizeKb: sizeKb,
+    };
+  }
+
+  public static isRoomCached(roomId: string): boolean {
+    this.warmCache();
+    return !!(this.messagesCache && this.messagesCache[roomId] && this.messagesCache[roomId].length > 0);
+  }
+
+  public static getRoomCachedCount(roomId: string): number {
+    this.warmCache();
+    return (this.messagesCache && this.messagesCache[roomId]) ? this.messagesCache[roomId].length : 0;
   }
 
   public static onSync(callback: () => void) {
@@ -161,11 +241,27 @@ export class StorageService {
   }
 
   // Messages
-  public static getMessages(roomId: string): Message[] {
+  public static getAllMessagesMap(): Record<string, Message[]> {
     this.init();
     try {
       const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
       const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+      this.messagesCache = all;
+      return all;
+    } catch {
+      return initialMockMessages;
+    }
+  }
+
+  public static getMessages(roomId: string): Message[] {
+    this.init();
+    try {
+      if (this.messagesCache && this.messagesCache[roomId]) {
+        return this.messagesCache[roomId];
+      }
+      const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
+      const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+      this.messagesCache = all;
       return all[roomId] || [];
     } catch {
       return [];
@@ -175,13 +271,26 @@ export class StorageService {
   public static saveRoomMessages(roomId: string, messages: Message[]): void {
     this.init();
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-      const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+      const all = this.getAllMessagesMap();
       all[roomId] = messages;
+      this.messagesCache = all;
+      this.lastCacheSync = Date.now();
       localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(all));
       this.notifySync();
     } catch (e) {
       console.error("Error saving room messages:", e);
+    }
+  }
+
+  public static saveAllMessagesMap(allMsgs: Record<string, Message[]>): void {
+    this.init();
+    try {
+      this.messagesCache = allMsgs;
+      this.lastCacheSync = Date.now();
+      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(allMsgs));
+      this.notifySync();
+    } catch (e) {
+      console.error("Error saving all messages map:", e);
     }
   }
 
@@ -374,13 +483,94 @@ export class StorageService {
     this.notifySync();
   }
 
-  public static getAccentColor(): string {
-    return localStorage.getItem(STORAGE_KEYS.ACCENT_COLOR) || "emerald";
+  public static getAccentColor(): AccentColorOption {
+    return (localStorage.getItem(STORAGE_KEYS.ACCENT_COLOR) as AccentColorOption) || "emerald";
   }
 
-  public static setAccentColor(color: string) {
+  public static setAccentColor(color: AccentColorOption) {
     localStorage.setItem(STORAGE_KEYS.ACCENT_COLOR, color);
+    this.applyAccentColorToCss(color);
     this.notifySync();
+  }
+
+  // Automatic Day / Night Palette Settings
+  public static getAutoTimePalette(): boolean {
+    const val = localStorage.getItem(STORAGE_KEYS.AUTO_TIME_PALETTE);
+    return val === null ? true : val === "true";
+  }
+
+  public static setAutoTimePalette(enabled: boolean) {
+    localStorage.setItem(STORAGE_KEYS.AUTO_TIME_PALETTE, String(enabled));
+    this.notifySync();
+  }
+
+  public static getAccentColorLight(): AccentColorOption {
+    return (localStorage.getItem(STORAGE_KEYS.ACCENT_COLOR_LIGHT) as AccentColorOption) || "cyan";
+  }
+
+  public static setAccentColorLight(color: AccentColorOption) {
+    localStorage.setItem(STORAGE_KEYS.ACCENT_COLOR_LIGHT, color);
+    this.notifySync();
+  }
+
+  public static getAccentColorDark(): AccentColorOption {
+    return (localStorage.getItem(STORAGE_KEYS.ACCENT_COLOR_DARK) as AccentColorOption) || "emerald";
+  }
+
+  public static setAccentColorDark(color: AccentColorOption) {
+    localStorage.setItem(STORAGE_KEYS.ACCENT_COLOR_DARK, color);
+    this.notifySync();
+  }
+
+  public static getDayNightPaletteSettings(): DayNightPaletteSettings {
+    return {
+      autoTimePalette: this.getAutoTimePalette(),
+      accentColorLight: this.getAccentColorLight(),
+      accentColorDark: this.getAccentColorDark(),
+    };
+  }
+
+  public static saveDayNightPaletteSettings(settings: Partial<DayNightPaletteSettings>) {
+    if (settings.autoTimePalette !== undefined) this.setAutoTimePalette(settings.autoTimePalette);
+    if (settings.accentColorLight) this.setAccentColorLight(settings.accentColorLight);
+    if (settings.accentColorDark) this.setAccentColorDark(settings.accentColorDark);
+  }
+
+  // Time of Day Palette Evaluator
+  public static calculateTimeOfDayPalette(): {
+    isDay: boolean;
+    theme: ThemeMode;
+    accentColor: AccentColorOption;
+    periodName: string;
+    timeString: string;
+    hours: number;
+  } {
+    const now = new Date();
+    const hours = now.getHours();
+    const isDay = hours >= 6 && hours < 19;
+    const lightAccent = this.getAccentColorLight();
+    const darkAccent = this.getAccentColorDark();
+
+    const timeString = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+    return {
+      isDay,
+      theme: isDay ? "light" : "dark",
+      accentColor: isDay ? lightAccent : darkAccent,
+      periodName: isDay ? "Diurno (06:00 - 19:00)" : "Nocturno (19:00 - 06:00)",
+      timeString,
+      hours,
+    };
+  }
+
+  // Dynamically update CSS custom variables for accent color in DOM
+  public static applyAccentColorToCss(color: AccentColorOption) {
+    if (typeof document === "undefined") return;
+    const config = ACCENT_COLOR_MAP[color] || ACCENT_COLOR_MAP.emerald;
+    const root = document.documentElement;
+    root.style.setProperty("--color-primary", config.hex);
+    root.style.setProperty("--color-primary-rgb", config.rgb);
+    root.style.setProperty("--color-primary-glow", config.glow);
   }
 
   public static getTheme(): ThemeMode {
@@ -610,11 +800,29 @@ export const storageService = {
   saveSoundSettings: (settings: Partial<SoundCustomizationSettings>) => StorageService.saveSoundSettings(settings),
   addCustomSound: (item: CustomSoundItem) => StorageService.addCustomSound(item),
   removeCustomSound: (soundId: string) => StorageService.removeCustomSound(soundId),
+  getCacheStats: () => StorageService.getCacheStats(),
+  isRoomCached: (roomId: string) => StorageService.isRoomCached(roomId),
+  getRoomCachedCount: (roomId: string) => StorageService.getRoomCachedCount(roomId),
+  getAutoTimePalette: () => StorageService.getAutoTimePalette(),
+  setAutoTimePalette: (enabled: boolean) => StorageService.setAutoTimePalette(enabled),
+  getAccentColorLight: () => StorageService.getAccentColorLight(),
+  setAccentColorLight: (color: AccentColorOption) => StorageService.setAccentColorLight(color),
+  getAccentColorDark: () => StorageService.getAccentColorDark(),
+  setAccentColorDark: (color: AccentColorOption) => StorageService.setAccentColorDark(color),
+  getDayNightPaletteSettings: () => StorageService.getDayNightPaletteSettings(),
+  saveDayNightPaletteSettings: (settings: Partial<DayNightPaletteSettings>) => StorageService.saveDayNightPaletteSettings(settings),
+  calculateTimeOfDayPalette: () => StorageService.calculateTimeOfDayPalette(),
+  applyAccentColorToCss: (color: AccentColorOption) => StorageService.applyAccentColorToCss(color),
+  getAccentColor: () => StorageService.getAccentColor(),
+  setAccentColor: (color: AccentColorOption) => StorageService.setAccentColor(color),
   getSettings: () => ({
     theme: StorageService.getTheme(),
     bubbleStyle: StorageService.getBubbleStyle(),
     font: StorageService.getFont(),
     accentColor: StorageService.getAccentColor(),
+    autoTimePalette: StorageService.getAutoTimePalette(),
+    accentColorLight: StorageService.getAccentColorLight(),
+    accentColorDark: StorageService.getAccentColorDark(),
     soundMuted: localStorage.getItem(STORAGE_KEYS.SOUND_MUTED) === "true",
     soundSettings: StorageService.getSoundSettings(),
     language: localStorage.getItem(STORAGE_KEYS.LANGUAGE) || "es",
@@ -625,6 +833,9 @@ export const storageService = {
     if (s.bubbleStyle) StorageService.setBubbleStyle(s.bubbleStyle);
     if (s.font) StorageService.setFont(s.font);
     if (s.accentColor) StorageService.setAccentColor(s.accentColor);
+    if (s.autoTimePalette !== undefined) StorageService.setAutoTimePalette(s.autoTimePalette);
+    if (s.accentColorLight) StorageService.setAccentColorLight(s.accentColorLight);
+    if (s.accentColorDark) StorageService.setAccentColorDark(s.accentColorDark);
     if (s.soundMuted !== undefined) localStorage.setItem(STORAGE_KEYS.SOUND_MUTED, String(s.soundMuted));
     if (s.language) localStorage.setItem(STORAGE_KEYS.LANGUAGE, s.language);
     if (s.readReceipts !== undefined) StorageService.setReadReceiptsEnabled(s.readReceipts);

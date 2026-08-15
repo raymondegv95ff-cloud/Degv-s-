@@ -1,0 +1,56 @@
+{
+  "packageId": "com.degv.messenger.twa",
+  "host": "degvs-messenger.web.app",
+  "name": "Degv's Messenger",
+  "launcherName": "Degv's",
+  "display": "standalone",
+  "themeColor": "#00E676",
+  "themeColorDark": "#050505",
+  "navigationColor": "#050505",
+  "navigationColorDark": "#000000",
+  "navigationDividerColor": "#00E676",
+  "navigationDividerColorDark": "#00E676",
+  "backgroundColor": "#050505",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://degvs-messenger.web.app/icon-512.png",
+  "maskableIconUrl": "https://degvs-messenger.web.app/icon-maskable.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "degvsmessenger"
+  },
+  "appVersionCode": 1,
+  "appVersionName": "1.0.0",
+  "shortcuts": [
+    {
+      "name": "Nuevo Chat",
+      "shortName": "Nuevo",
+      "url": "/?action=new-chat",
+      "chosenIcon": "public/icon-192.png"
+    },
+    {
+      "name": "Degv's AI",
+      "shortName": "IA Chat",
+      "url": "/?action=ai-chat",
+      "chosenIcon": "public/icon-192.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://degvs-messenger.web.app/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": true
+    },
+    "playBilling": {
+      "enabled": false
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false
+}
