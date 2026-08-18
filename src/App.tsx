@@ -11,6 +11,8 @@ import {
   updateMessageReactionInFirestore,
   saveRoomToFirestore,
   subscribeToFirebaseAuth,
+  listenForFirestoreUsers,
+  getDirectChatRoomId,
 } from "./services/firebase";
 
 // Sidebar components
@@ -37,6 +39,7 @@ import { E2EEModal } from "./components/Modals/E2EEModal";
 import { CallModal } from "./components/Modals/CallModal";
 import { AndroidGuideModal } from "./components/Modals/AndroidGuideModal";
 import { PublishDeployModal } from "./components/Modals/PublishDeployModal";
+import { GitHubActionsModal } from "./components/Modals/GitHubActionsModal";
 import { RoomLockModal } from "./components/Modals/RoomLockModal";
 import { RoomLockSetupModal } from "./components/Modals/RoomLockSetupModal";
 import { BackupModal } from "./components/Modals/BackupModal";
@@ -88,6 +91,7 @@ export const App: React.FC = () => {
   const [callIsVideo, setCallIsVideo] = useState(false);
   const [isAndroidGuideOpen, setIsAndroidGuideOpen] = useState(false);
   const [isPublishDeployOpen, setIsPublishDeployOpen] = useState(false);
+  const [isGitHubActionsModalOpen, setIsGitHubActionsModalOpen] = useState(false);
   const [isPlatformUpdateOpen, setIsPlatformUpdateOpen] = useState(false);
   const [platformUpdateState, setPlatformUpdateState] = useState<CrossPlatformUpdateState>(() =>
     platformUpdateService.getState()
@@ -99,6 +103,7 @@ export const App: React.FC = () => {
   const [isStorageCleanerOpen, setIsStorageCleanerOpen] = useState(false);
   const [isStarredModalOpen, setIsStarredModalOpen] = useState(false);
   const [forwardMessage, setForwardMessage] = useState<Message | null>(null);
+  const [firestoreUsers, setFirestoreUsers] = useState<UserProfile[]>([]);
 
   // Group & Channel Creation State
   const [isCreateGroupChannelOpen, setIsCreateGroupChannelOpen] = useState(false);
@@ -121,6 +126,36 @@ export const App: React.FC = () => {
     });
     return () => unsubscribe();
   }, []);
+
+  // Listen for all real-time Firestore registered users
+  useEffect(() => {
+    const unsubscribe = listenForFirestoreUsers((cloudUsers) => {
+      setFirestoreUsers(cloudUsers);
+      cloudUsers.forEach((u) => {
+        if (!currentUser || u.id !== currentUser.id) {
+          storageService.saveContact(u);
+        }
+      });
+    });
+    return () => unsubscribe();
+  }, [currentUser?.id]);
+
+  // Combined contacts list (local storage + real-time Firestore users)
+  const mergedContactsList = React.useMemo(() => {
+    const local = storageService.getContacts();
+    const map = new Map<string, UserProfile>();
+    local.forEach((u) => {
+      if (u && (!currentUser || u.id !== currentUser.id)) {
+        map.set(u.id, u);
+      }
+    });
+    firestoreUsers.forEach((u) => {
+      if (u && (!currentUser || u.id !== currentUser.id)) {
+        map.set(u.id, u);
+      }
+    });
+    return Array.from(map.values());
+  }, [firestoreUsers, currentUser?.id]);
 
   // Firestore Real-Time Message Listener for direct inbox
   useEffect(() => {
@@ -174,8 +209,42 @@ export const App: React.FC = () => {
     const unsubscribe = platformUpdateService.subscribe((st) => {
       setPlatformUpdateState(st);
     });
-    return () => unsubscribe();
+
+    // Explicit listener for DEGV_SW_UPDATE_READY events emitted by SW or registration lifecycle
+    const handleSwUpdateReady = (event: any) => {
+      console.log("[App] DEGV_SW_UPDATE_READY event detected:", event.detail);
+      setPlatformUpdateState((prev) => ({
+        ...prev,
+        isUpdateAvailable: true,
+        newVersion: event.detail?.version || "v2.5.0",
+      }));
+    };
+
+    window.addEventListener("DEGV_SW_UPDATE_READY", handleSwUpdateReady);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("DEGV_SW_UPDATE_READY", handleSwUpdateReady);
+    };
   }, []);
+
+  // Safe handler to execute atomic reload without blank screens
+  const handleApplySwUpdate = () => {
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistration().then((reg) => {
+        if (reg?.waiting) {
+          reg.waiting.postMessage({ type: "SKIP_WAITING" });
+        }
+        // Trigger clean reload once active cache is confirmed
+        setTimeout(() => {
+          window.location.reload();
+        }, 150);
+      }).catch(() => {
+        window.location.reload();
+      });
+    } else {
+      window.location.reload();
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = indexedDbQueueService.subscribe((onlineStatus, count) => {
@@ -602,7 +671,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // AI Response Handler via Express Server API
+  // AI Response Handler via Express Server API with robust Gemini Streaming
   const handleAiResponse = async (roomId: string, userPrompt: string, history: Message[]) => {
     try {
       if (userPrompt.startsWith("/imagine")) {
@@ -635,37 +704,136 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Standard Gemini Chat Endpoint
-      const res = await fetch("/api/ai/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userPrompt, history: history.slice(-6) }),
-      });
-      const data = await res.json();
+      // Prepare efficient context window: clean up history to the last 6 turns to avoid context saturation
+      const contextHistory = history.slice(-6).map((m) => ({
+        senderId: m.senderId,
+        senderName: m.senderName,
+        content: m.content,
+        timestamp: m.timestamp,
+      }));
 
-      const aiText = data.text || "Lo siento, tuve un problema procesando tu mensaje.";
-
-      const aiMsg: Message = {
-        id: `msg_ai_${Date.now()}`,
+      const aiMessageId = `msg_ai_${Date.now()}`;
+      const initialAiMsg: Message = {
+        id: aiMessageId,
         roomId,
         senderId: "usr_ai_assistant",
         senderName: "Degv's AI",
         type: "text",
-        content: aiText,
+        content: "...",
         createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         timestamp: Date.now(),
         isRead: true,
       };
 
+      // Add placeholder message for streaming
+      setMessagesMap((prev) => ({
+        ...prev,
+        [roomId]: [...(prev[roomId] || []), initialAiMsg],
+      }));
+
+      // Try streaming endpoint first
+      let accumulatedText = "";
+      let streamingSucceeded = false;
+
+      try {
+        const streamResponse = await fetch("/api/ai/chat/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: userPrompt,
+            history: contextHistory,
+          }),
+        });
+
+        if (streamResponse.ok && streamResponse.body) {
+          const reader = streamResponse.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("data:")) {
+                const dataPayload = trimmed.replace(/^data:\s*/, "");
+                if (dataPayload === "[DONE]") {
+                  streamingSucceeded = true;
+                  break;
+                }
+                try {
+                  const parsed = JSON.parse(dataPayload);
+                  if (parsed.text) {
+                    accumulatedText += parsed.text;
+                    setMessagesMap((prev) => {
+                      const list = prev[roomId] || [];
+                      return {
+                        ...prev,
+                        [roomId]: list.map((m) =>
+                          m.id === aiMessageId ? { ...m, content: accumulatedText } : m
+                        ),
+                      };
+                    });
+                  }
+                } catch {
+                  // Fallback for raw text chunks
+                  if (dataPayload) {
+                    accumulatedText += dataPayload;
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (streamErr) {
+        console.warn("[App] Streaming failed, falling back to unary chat:", streamErr);
+      }
+
+      // If streaming didn't produce text, use standard fallback
+      if (!streamingSucceeded || !accumulatedText.trim()) {
+        const res = await fetch("/api/ai/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: userPrompt, history: contextHistory }),
+        });
+        const data = await res.json();
+        accumulatedText = data.text || data.reply || "Lo siento, tuve un problema procesando tu mensaje.";
+      }
+
+      const finalAiMsg: Message = {
+        id: aiMessageId,
+        roomId,
+        senderId: "usr_ai_assistant",
+        senderName: "Degv's AI",
+        type: "text",
+        content: accumulatedText,
+        createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        timestamp: Date.now(),
+        isRead: true,
+      };
+
+      setMessagesMap((prev) => {
+        const list = prev[roomId] || [];
+        const exists = list.some((m) => m.id === aiMessageId);
+        const updated = exists
+          ? list.map((m) => (m.id === aiMessageId ? finalAiMsg : m))
+          : [...list, finalAiMsg];
+        storageService.saveMessage(roomId, finalAiMsg);
+        return { ...prev, [roomId]: updated };
+      });
+
       if (!soundMuted) soundService.playReceiveSound();
-      setMessagesMap((prev) => ({ ...prev, [roomId]: [...(prev[roomId] || []), aiMsg] }));
-      storageService.saveMessage(roomId, aiMsg);
-      notificationService.sendNotification("Degv's AI", aiText, roomId, "aiActivity");
+      notificationService.sendNotification("Degv's AI", accumulatedText.slice(0, 100), roomId, "aiActivity");
 
       setRooms((prev) =>
         prev.map((r) =>
           r.id === roomId
-            ? { ...r, lastMessage: aiText, lastMessageTime: aiMsg.createdAt }
+            ? { ...r, lastMessage: accumulatedText.slice(0, 60), lastMessageTime: finalAiMsg.createdAt }
             : r
         )
       );
@@ -835,22 +1003,28 @@ export const App: React.FC = () => {
 
   // Select User from Search Bar
   const handleSelectUserFromSearch = (u: UserProfile) => {
-    if (!u) return;
+    if (!u || !currentUser || u.id === currentUser.id) return;
     storageService.saveContact(u);
 
-    let existing = rooms.find((r) => r && r.participants && r.participants.some((p) => p && p.id === u.id));
+    const directRoomId = getDirectChatRoomId(currentUser.id, u.id);
+    let existing = rooms.find(
+      (r) =>
+        r.id === directRoomId ||
+        (r && !r.isGroup && !r.isChannel && !r.isSecretVault && r.participants?.some((p) => p && p.id === u.id))
+    );
     if (!existing) {
       existing = {
-        id: `room_${u.id}_${Date.now()}`,
+        id: directRoomId,
         name: `${u.firstName || ""} ${u.lastName || ""}`.trim() || u.username || "Contacto",
         avatarUrl: u.avatarUrl,
         unreadCount: 0,
-        participants: [u],
+        participants: [currentUser, u],
         lastMessage: "Conversación iniciada",
         lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
-      setRooms((prev) => [existing!, ...prev]);
+      setRooms((prev) => [existing!, ...prev.filter((r) => r.id !== directRoomId)]);
       storageService.saveRoom(existing);
+      saveRoomToFirestore(existing);
     }
     handleSelectRoom(existing.id);
     setSearchTerm("");
@@ -885,6 +1059,7 @@ export const App: React.FC = () => {
           onOpenAndroidGuide={() => setIsAndroidGuideOpen(true)}
           onOpenPublishDeploy={() => setIsPublishDeployOpen(true)}
           onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
+          onOpenGitHubActions={() => setIsGitHubActionsModalOpen(true)}
           isUpdateAvailable={platformUpdateState.isUpdateAvailable}
           isOptimizing={platformUpdateState.isUpdating}
           theme={theme}
@@ -1136,37 +1311,38 @@ export const App: React.FC = () => {
       <NewChatModal
         isOpen={isNewChatOpen}
         onClose={() => setIsNewChatOpen(false)}
-        users={storageService.getContacts()}
+        users={mergedContactsList}
         currentUser={currentUser || undefined}
         onSelectUser={(u) => {
-          if (!u) return;
-          let targetUser = u;
-          // Guard against selecting currentUser
-          if (currentUser && targetUser.id === currentUser.id) {
-            targetUser = {
-              ...targetUser,
-              id: `usr_contact_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-              firstName: `${targetUser.firstName || "Contacto"} (Contacto)`,
-            };
-          }
+          if (!u || !currentUser || u.id === currentUser.id) return;
+          const targetUser = u;
 
           // Ensure contact is saved in persistent storage
           storageService.saveContact(targetUser);
 
+          const directRoomId = getDirectChatRoomId(currentUser.id, targetUser.id);
           // Check if room exists
-          let existing = rooms.find((r) => r && !r.isGroup && !r.isChannel && !r.isSecretVault && r.participants && r.participants.some((p) => p && p.id === targetUser.id));
+          let existing = rooms.find(
+            (r) =>
+              r.id === directRoomId ||
+              (r && !r.isGroup && !r.isChannel && !r.isSecretVault && r.participants?.some((p) => p && p.id === targetUser.id))
+          );
           if (!existing) {
             existing = {
-              id: `room_${targetUser.id}_${Date.now()}`,
+              id: directRoomId,
               name: `${targetUser.firstName || ""} ${targetUser.lastName || ""}`.trim() || targetUser.username || "Contacto",
               avatarUrl: targetUser.avatarUrl,
               unreadCount: 0,
-              participants: [targetUser],
+              participants: [currentUser, targetUser],
+              lastMessage: "Conversación iniciada",
+              lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
             };
-            setRooms((prev) => [existing!, ...prev.filter((r) => r.id !== existing!.id)]);
+            setRooms((prev) => [existing!, ...prev.filter((r) => r.id !== directRoomId)]);
             storageService.saveRoom(existing);
+            saveRoomToFirestore(existing);
           }
           handleSelectRoom(existing.id);
+          setIsNewChatOpen(false);
         }}
         onAddNewContact={({ name, email, phone }) => {
           const derivedUsername = email ? email.split("@")[0].toLowerCase() : name.toLowerCase().replace(/\s+/g, "_");
@@ -1182,15 +1358,19 @@ export const App: React.FC = () => {
             status: "online",
           };
           storageService.saveContact(newContact);
+          const directRoomId = currentUser ? getDirectChatRoomId(currentUser.id, newContact.id) : `room_${Date.now()}`;
           const newRoom: Room = {
-            id: `room_${Date.now()}`,
+            id: directRoomId,
             name,
             avatarUrl: newContact.avatarUrl,
             unreadCount: 0,
-            participants: [newContact],
+            participants: currentUser ? [currentUser, newContact] : [newContact],
+            lastMessage: "Conversación iniciada",
+            lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           };
-          setRooms((prev) => [newRoom, ...prev]);
+          setRooms((prev) => [newRoom, ...prev.filter((r) => r.id !== directRoomId)]);
           storageService.saveRoom(newRoom);
+          saveRoomToFirestore(newRoom);
           handleSelectRoom(newRoom.id);
         }}
         onOpenCreateGroup={() => {
@@ -1220,10 +1400,11 @@ export const App: React.FC = () => {
             status: "online",
           }
         }
-        allUsers={storageService.getContacts()}
+        allUsers={mergedContactsList}
         onCreateRoom={(newRoom) => {
           setRooms((prev) => [newRoom, ...prev]);
           storageService.saveRoom(newRoom);
+          saveRoomToFirestore(newRoom);
           handleSelectRoom(newRoom.id);
           setIsCreateGroupChannelOpen(false);
         }}
@@ -1357,6 +1538,7 @@ export const App: React.FC = () => {
         onOpenAndroidGuide={() => setIsAndroidGuideOpen(true)}
         onOpenPublishDeploy={() => setIsPublishDeployOpen(true)}
         onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
+        onOpenGitHubActions={() => setIsGitHubActionsModalOpen(true)}
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onOpenSupportBot={() => setIsSupportBotOpen(true)}
         onOpenStorageCleaner={() => setIsStorageCleanerOpen(true)}
@@ -1366,6 +1548,12 @@ export const App: React.FC = () => {
           setIsSettingsOpen(false);
           setIsAuthModalOpen(true);
         }}
+      />
+
+      {/* GitHub Actions CI/CD Synchronization & Diagnostic Modal */}
+      <GitHubActionsModal
+        isOpen={isGitHubActionsModalOpen}
+        onClose={() => setIsGitHubActionsModalOpen(false)}
       />
 
       {/* Space Cleaner (Limpiador de Espacio) Modal */}
@@ -1449,6 +1637,7 @@ export const App: React.FC = () => {
         isOpen={isPublishDeployOpen}
         onClose={() => setIsPublishDeployOpen(false)}
         onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
+        onOpenGitHubActions={() => setIsGitHubActionsModalOpen(true)}
       />
 
       {/* Universal Cross-Platform Update & Optimizer Modal */}

@@ -52,41 +52,49 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       // 1. Promote staging cache assets to active cache
-      const stageCache = await caches.open(STAGE_CACHE_VERSION);
-      const activeCache = await caches.open(CURRENT_CACHE_VERSION);
-      const stagedRequests = await stageCache.keys();
+      try {
+        const stageCache = await caches.open(STAGE_CACHE_VERSION);
+        const activeCache = await caches.open(CURRENT_CACHE_VERSION);
+        const stagedRequests = await stageCache.keys();
 
-      await Promise.all(
-        stagedRequests.map(async (req) => {
-          const resp = await stageCache.match(req);
-          if (resp) {
-            await activeCache.put(req, resp);
-          }
-        })
-      );
-
-      // 2. Purge obsolete caches
-      const cacheNames = await caches.keys();
-      await Promise.all(
-        cacheNames
-          .filter((name) => name !== CURRENT_CACHE_VERSION && name !== STAGE_CACHE_VERSION)
-          .map((name) => {
-            console.log('[SW-Atomic] Purging obsolete cache:', name);
-            return caches.delete(name);
+        await Promise.all(
+          stagedRequests.map(async (req) => {
+            const resp = await stageCache.match(req);
+            if (resp) {
+              await activeCache.put(req, resp);
+            }
           })
-      );
+        );
+      } catch (e) {
+        console.warn('[SW-Atomic] Staging promotion notice:', e);
+      }
+
+      // 2. Purge obsolete caches safely
+      try {
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames
+            .filter((name) => name !== CURRENT_CACHE_VERSION && name !== STAGE_CACHE_VERSION)
+            .map((name) => {
+              console.log('[SW-Atomic] Purging obsolete cache:', name);
+              return caches.delete(name);
+            })
+        );
+      } catch (e) {
+        console.warn('[SW-Atomic] Cache cleanup notice:', e);
+      }
 
       // 3. Take control of all clients immediately
       await self.clients.claim();
 
-      // 4. Broadcast Atomic Update Ready signal to App.tsx and all open clients
+      // 4. Broadcast Atomic Update Ready signal to App.tsx and all open clients without disrupting active UI
       const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       allClients.forEach((client) => {
         client.postMessage({
           type: 'SW_UPDATE_READY',
-          action: 'RELOAD_PROMPT',
+          action: 'NOTIFY_USER',
           version: CURRENT_CACHE_VERSION,
-          message: 'Nueva versión lista para el despliegue nativo y web. Recarga para aplicar los cambios.',
+          message: 'Nueva versión lista para el despliegue nativo y web. Los cambios se aplicarán de forma transparente.',
           timestamp: Date.now()
         });
         client.postMessage({

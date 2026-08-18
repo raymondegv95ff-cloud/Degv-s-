@@ -47,20 +47,47 @@
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js', { scope: '/' })
-            .then(reg => {
+            .then((reg) => {
               console.log('[PWA] Service Worker registered scope:', reg.scope);
-              reg.update();
-            })
-            .catch(err => console.warn('[PWA] Service Worker registration notice:', err));
+              reg.update().catch(() => {});
 
-          // Check for update every time PWA gains focus (app re-opened from background)
-          document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-              navigator.serviceWorker.getRegistration().then(reg => {
-                if (reg) {
-                  reg.update();
+              // Listen for updates discovered on load
+              reg.addEventListener('updatefound', () => {
+                const newWorker = reg.installing;
+                if (newWorker) {
+                  newWorker.addEventListener('statechange', () => {
+                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                      console.log('[PWA] New version ready in background');
+                      window.dispatchEvent(
+                        new CustomEvent('DEGV_SW_UPDATE_READY', {
+                          detail: {
+                            type: 'SW_UPDATE_READY',
+                            message: 'Nueva versión disponible. Los cambios se aplicarán de forma transparente.',
+                            timestamp: Date.now()
+                          }
+                        })
+                      );
+                    }
+                  });
                 }
               });
+            })
+            .catch((err) => console.warn('[PWA] Service Worker registration notice:', err));
+
+          // Check for update seamlessly every time the user brings the app/tab back into focus
+          let lastVisibilityCheck = 0;
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+              const now = Date.now();
+              // Prevent excessive calls by debouncing 20 seconds between visibility checks
+              if (now - lastVisibilityCheck > 20000) {
+                lastVisibilityCheck = now;
+                navigator.serviceWorker.getRegistration().then((reg) => {
+                  if (reg) {
+                    reg.update().catch((err) => console.warn('[PWA] Background SW update check notice:', err));
+                  }
+                }).catch(() => {});
+              }
             }
           });
         });

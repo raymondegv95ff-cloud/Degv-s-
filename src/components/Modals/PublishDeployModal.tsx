@@ -29,6 +29,7 @@ interface PublishDeployModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenPlatformUpdate?: () => void;
+  onOpenGitHubActions?: () => void;
 }
 
 type TabType = "all" | "github_antigravity" | "appflow" | "termux" | "capacitor" | "bubblewrap" | "pwabuilder" | "vercel" | "firebase";
@@ -37,6 +38,7 @@ export const PublishDeployModal: React.FC<PublishDeployModalProps> = ({
   isOpen,
   onClose,
   onOpenPlatformUpdate,
+  onOpenGitHubActions,
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>("all");
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -268,6 +270,31 @@ export const PublishDeployModal: React.FC<PublishDeployModalProps> = ({
             )}
           </button>
         </div>
+
+        {/* Dedicated GitHub Actions Action Bar */}
+        {onOpenGitHubActions && (
+          <div className="p-3 bg-gradient-to-r from-emerald-950 via-slate-900 to-teal-950 rounded-2xl border border-emerald-500/40 flex items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-emerald-500/20 text-[#00E676]">
+                <FolderGit2 className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs font-black text-white">GitHub Actions CI/CD — Enlazar, Actualizar y Reajustar</p>
+                <p className="text-[10px] text-slate-400">Verifica la integridad de la rama main, repara flujos y compila APK sin errores</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                onClose();
+                onOpenGitHubActions();
+              }}
+              className="px-3 py-1.5 rounded-xl bg-[#00E676] hover:bg-[#00c864] text-slate-950 text-xs font-black flex items-center gap-1.5 transition shrink-0 shadow-lg shadow-[#00E676]/20"
+            >
+              <span>Abrir CI/CD</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Cross-Platform Sync and Link Hub Action Bar */}
         {onOpenPlatformUpdate && (

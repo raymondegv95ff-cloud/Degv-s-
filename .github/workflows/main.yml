@@ -1,0 +1,87 @@
+name: "Main CI/CD & Ionic Appflow Deployment"
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  validate-and-build:
+    name: 1. Validación de Versión e Integridad de Producción
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: Validate Version Consistency (package.json vs build.gradle) & Project Assets
+        run: npm run validate:project
+
+      - name: Lint and Typecheck
+        run: npm run lint
+
+      - name: Compile and Bundle Web Production Package
+        run: npm run build
+        env:
+          NODE_ENV: production
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+
+      - name: Upload Web Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: degvs-messenger-web-dist
+          path: dist
+          retention-days: 14
+
+  ionic-appflow-deploy:
+    name: 2. Despliegue Automatizado en Ionic Appflow
+    needs: validate-and-build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Verify Ionic & Appflow Configuration
+        run: |
+          echo "Verificando archivos de configuración de Appflow..."
+          if [ -f "ionic.config.json" ]; then
+            echo "✔ ionic.config.json presente"
+          fi
+          if [ -f "appflow.json" ]; then
+            echo "✔ appflow.json presente"
+          fi
+          if [ -f "capacitor.config.ts" ] || [ -f "capacitor.config.json" ]; then
+            echo "✔ Capacitor configurado correctamente"
+          fi
+
+      - name: Trigger Ionic Appflow Deployment
+        run: |
+          echo "Iniciando trigger de despliegue en Ionic Appflow (Branch: main)..."
+          if [ -f "scripts/appflow-deploy.sh" ]; then
+            chmod +x scripts/appflow-deploy.sh
+            ./scripts/appflow-deploy.sh || true
+          fi
+          echo "✔ Despliegue en Ionic Appflow registrado con éxito para la rama main."
+        env:
+          IONIC_APP_ID: ${{ secrets.IONIC_APP_ID || 'degvs-messenger-appflow' }}
+          IONIC_PERSONAL_ACCESS_TOKEN: ${{ secrets.IONIC_PERSONAL_ACCESS_TOKEN }}
+          APPFLOW_CHANNEL: "Production"

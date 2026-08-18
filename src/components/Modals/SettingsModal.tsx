@@ -64,6 +64,7 @@ interface SettingsModalProps {
   onOpenAndroidGuide: () => void;
   onOpenPublishDeploy?: () => void;
   onOpenPlatformUpdate?: () => void;
+  onOpenGitHubActions?: () => void;
   onOpenBackupModal?: () => void;
   onOpenSupportBot?: () => void;
   onOpenStorageCleaner?: () => void;
@@ -99,6 +100,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenAndroidGuide,
   onOpenPublishDeploy,
   onOpenPlatformUpdate,
+  onOpenGitHubActions,
   onOpenBackupModal,
   onOpenSupportBot,
   onOpenStorageCleaner,
@@ -655,6 +657,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         )}
 
+        {/* Dedicated GitHub Actions Update, Link & Realign Button */}
+        <button
+          onClick={() => {
+            onClose();
+            if (onOpenGitHubActions) onOpenGitHubActions();
+            else if (onOpenPublishDeploy) onOpenPublishDeploy();
+          }}
+          className="w-full p-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-500 to-[#00E676] text-slate-950 font-black text-xs flex items-center justify-between gap-2.5 transition shadow-xl shadow-emerald-500/20 hover:opacity-95 active:scale-98"
+          id="github-actions-sync-btn"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="p-1 rounded-lg bg-slate-950/20 text-slate-950">
+              <RefreshCw className="w-4 h-4" />
+            </div>
+            <div className="text-left">
+              <p className="font-black text-slate-950">Actualizar, Enlazar y Reajustar en GitHub Actions</p>
+              <p className="text-[10px] text-slate-900/80 font-medium">Sincronizar rama main, CI/CD y compilar APK sin errores</p>
+            </div>
+          </div>
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-950 text-[#00E676] uppercase font-black">
+            CI/CD &gt;
+          </span>
+        </button>
+
         {/* GitHub, Antigravity, Termux, Capacitor & Bubblewrap Hub */}
         <button
           onClick={() => {
@@ -662,10 +688,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             if (onOpenPublishDeploy) onOpenPublishDeploy();
             else onOpenAndroidGuide();
           }}
-          className="w-full p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/70 via-cyan-950/70 to-indigo-950/70 border border-emerald-500/50 hover:border-[#00E676] text-white font-extrabold text-xs flex items-center justify-center gap-2.5 transition shadow-xl shadow-emerald-950/40 group active:scale-98"
+          className="w-full p-3 rounded-2xl bg-slate-950 border border-slate-800 hover:border-emerald-500/50 text-slate-300 hover:text-emerald-300 font-bold text-xs flex items-center justify-center gap-2.5 transition"
         >
-          <FolderGit2 className="w-4 h-4 text-[#00E676] group-hover:scale-110 transition-transform" />
-          <span>GitHub, Antigravity, Termux, Capacitor & Bubblewrap Hub</span>
+          <FolderGit2 className="w-4 h-4 text-[#00E676]" />
+          <span>Repositorio GitHub, Termux & Capacitor Hub</span>
         </button>
 
         {/* Android PWA / Capacitor Guide */}

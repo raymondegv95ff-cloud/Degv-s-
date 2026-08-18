@@ -26,6 +26,7 @@ interface SidebarHeaderProps {
   onOpenAndroidGuide: () => void;
   onOpenPublishDeploy?: () => void;
   onOpenPlatformUpdate?: () => void;
+  onOpenGitHubActions?: () => void;
   isUpdateAvailable?: boolean;
   isOptimizing?: boolean;
   theme: ThemeMode;
@@ -43,6 +44,7 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
   onOpenAndroidGuide,
   onOpenPublishDeploy,
   onOpenPlatformUpdate,
+  onOpenGitHubActions,
   isUpdateAvailable = false,
   isOptimizing = false,
   theme,
@@ -130,14 +132,14 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
 
         {/* GitHub, Antigravity, Termux, Capacitor Hub */}
         <button
-          onClick={onOpenPublishDeploy || onOpenAndroidGuide}
-          title="GitHub, Antigravity, Termux, Capacitor & Bubblewrap Hub"
+          onClick={onOpenGitHubActions || onOpenPublishDeploy || onOpenAndroidGuide}
+          title="GitHub Actions CI/CD, APK & Sincronización"
           className="p-1.5 rounded-xl hover:text-[#00E676] bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 transition-colors relative group"
           id="publish-deploy-btn"
         >
           <FolderGit2 className="w-4 h-4 text-[#00E676]" />
           <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-[#0a0a0a] text-[#00E676] font-bold text-[10px] py-0.5 px-2 rounded opacity-0 group-hover:opacity-100 transition pointer-events-none whitespace-nowrap z-50 border border-emerald-500/40 shadow-lg">
-            GitHub / APK / Termux
+            GitHub Actions / APK
           </span>
         </button>
 

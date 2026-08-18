@@ -10,6 +10,7 @@
     "ionic:serve": "vite",
     "appflow:build": "vite build",
     "appflow:sync": "vite build",
+    "validate:project": "node scripts/validate-project.js",
     "validate:integrity": "node scripts/validate-production-integrity.js",
     "validate:versions": "node scripts/validate-versions-and-manifest.js",
     "start": "node dist/server.cjs",

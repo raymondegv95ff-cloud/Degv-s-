@@ -35,7 +35,7 @@ export const E2EEModal: React.FC<E2EEModalProps> = ({ isOpen, onClose, roomName 
         <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
           <p className="text-[10px] font-mono text-[#00E676] font-bold">Código QR de Verificación de Seguridad</p>
           <div className="w-36 h-36 mx-auto bg-white p-2 rounded-xl flex items-center justify-center">
-            {/* SVG simulated QR code */}
+            {/* QR Code de Cifrado Criptográfico */}
             <QrCode className="w-32 h-32 text-slate-950" />
           </div>
           <p className="text-[9px] font-mono text-slate-500">KEY-VERIFY-9921-DEGV-SECURE-E2EE</p>

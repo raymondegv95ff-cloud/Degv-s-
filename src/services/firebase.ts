@@ -222,7 +222,53 @@ export async function syncUserProfileToFirestore(user: UserProfile): Promise<voi
 }
 
 /**
- * 1. Enviar mensaje a Firestore en tiempo real
+ * Genera un Room ID determinista y único para chats 1 a 1 entre dos usuarios
+ */
+export function getDirectChatRoomId(userAId: string, userBId: string): string {
+  const cleanA = (userAId || "").trim();
+  const cleanB = (userBId || "").trim();
+  return `dm_${[cleanA, cleanB].sort().join("_")}`;
+}
+
+/**
+ * Escucha la lista global de usuarios registrados en Firestore en tiempo real
+ */
+export function listenForFirestoreUsers(onUsersUpdate: (users: UserProfile[]) => void): Unsubscribe {
+  try {
+    const usersCollection = collection(db, "users");
+    const q = query(usersCollection, orderBy("lastSeen", "desc"));
+
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const users: UserProfile[] = snapshot.docs.map((docSnap) => {
+          const d = docSnap.data();
+          return {
+            id: docSnap.id,
+            username: d.username || docSnap.id,
+            firstName: d.firstName || d.username || "Usuario",
+            lastName: d.lastName || "",
+            email: d.email || `${d.username || docSnap.id}@degvs.app`,
+            avatarUrl: d.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(docSnap.id)}`,
+            bio: d.bio || "",
+            status: d.status || "online",
+            phone: d.phone,
+          };
+        });
+        onUsersUpdate(users);
+      },
+      (err) => {
+        console.warn("[Firestore] User list listener notice:", err.message);
+      }
+    );
+  } catch (err) {
+    console.warn("[Firestore] Failed to listen to firestore users:", err);
+    return () => {};
+  }
+}
+
+/**
+ * 1. Enviar mensaje a Firestore en tiempo real garantizando destino correcto
  */
 export async function sendMessage(
   senderId: string,
@@ -231,12 +277,13 @@ export async function sendMessage(
   extraData: Partial<Message> = {}
 ): Promise<string> {
   try {
-    const roomId = extraData.roomId || `room_${[senderId, receiverId].sort().join("_")}`;
+    const roomId = extraData.roomId || getDirectChatRoomId(senderId, receiverId);
     const messagesCollection = collection(db, "messages");
 
     const messageData = {
       senderId,
       receiverId,
+      recipientId: receiverId, // Dual-key compatibility for strict routing
       text,
       content: text,
       roomId,
@@ -279,6 +326,7 @@ export async function sendMessage(
 
 /**
  * 2. Escuchar los mensajes entrantes en tiempo real para el usuario actual
+ * Diferencia estrictamente entre senderId y recipientId/receiverId para evitar ecos/reflejos
  */
 export function listenForMessages(
   currentUserId: string,
@@ -297,9 +345,22 @@ export function listenForMessages(
         snapshot.docChanges().forEach((change) => {
           if (change.type === "added") {
             const data = change.doc.data();
+            
+            // Diferenciación estricta: NO reflejar mensajes enviados por el propio usuario
+            if (data.senderId === currentUserId) {
+              return;
+            }
+
+            // Validación explícita de destinatario (recipientId / receiverId)
+            const targetRecipient = data.recipientId || data.receiverId;
+            const isExplicitRecipient = targetRecipient === currentUserId || targetRecipient === "usr_all";
+            if (!isExplicitRecipient) {
+              return;
+            }
+
             const messageObj: Message = {
               id: change.doc.id,
-              roomId: data.roomId || `room_${[data.senderId, data.receiverId].sort().join("_")}`,
+              roomId: data.roomId || getDirectChatRoomId(data.senderId, currentUserId),
               senderId: data.senderId,
               senderName: data.senderName || "Usuario",
               senderAvatar: data.senderAvatar,
