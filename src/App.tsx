@@ -161,6 +161,48 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser?.id) return;
     const unsubscribe = listenForMessages(currentUser.id, (incomingMsg) => {
+      // 1. Ensure room exists in state and storage
+      setRooms((prevRooms) => {
+        const roomExists = prevRooms.some((r) => r.id === incomingMsg.roomId);
+        if (!roomExists) {
+          const newRoom: Room = {
+            id: incomingMsg.roomId,
+            name: incomingMsg.senderName || "Contacto",
+            avatarUrl: incomingMsg.senderAvatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(incomingMsg.senderId)}`,
+            unreadCount: 1,
+            lastMessage: incomingMsg.content || "Nuevo mensaje",
+            lastMessageTime: incomingMsg.createdAt || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            participants: [
+              currentUser,
+              {
+                id: incomingMsg.senderId,
+                username: incomingMsg.senderName?.toLowerCase().replace(/\s+/g, "_") || "contacto",
+                firstName: incomingMsg.senderName || "Contacto",
+                lastName: "",
+                avatarUrl: incomingMsg.senderAvatar,
+                status: "online",
+              },
+            ],
+          };
+          storageService.saveRoom(newRoom);
+          return [newRoom, ...prevRooms];
+        } else {
+          const updated = prevRooms.map((r) =>
+            r.id === incomingMsg.roomId
+              ? {
+                  ...r,
+                  lastMessage: incomingMsg.content,
+                  lastMessageTime: incomingMsg.createdAt,
+                  unreadCount: r.id === activeChatId ? 0 : (r.unreadCount || 0) + 1,
+                }
+              : r
+          );
+          storageService.saveRooms(updated);
+          return updated;
+        }
+      });
+
+      // 2. Append message
       setMessagesMap((prev) => {
         const roomMsgs = prev[incomingMsg.roomId] || [];
         if (roomMsgs.some((m) => m.id === incomingMsg.id || (m.timestamp === incomingMsg.timestamp && m.content === incomingMsg.content))) {
@@ -183,7 +225,65 @@ export const App: React.FC = () => {
     });
 
     return () => unsubscribe();
-  }, [currentUser?.id, soundMuted]);
+  }, [currentUser, soundMuted, activeChatId]);
+
+  // Deep-linking / Real-time QR & URL pairing listener
+  useEffect(() => {
+    if (typeof window === "undefined" || !currentUser) return;
+
+    const handleDeepLinkPairing = () => {
+      const hash = window.location.hash ? window.location.hash.replace(/^#/, "") : "";
+      const search = window.location.search ? window.location.search.replace(/^\?/, "") : "";
+      const params = new URLSearchParams(hash || search);
+
+      const pairId = params.get("pair");
+      const pairName = params.get("name") || params.get("user") || "Contacto";
+      const pairUsername = params.get("user") || (pairId ? `user_${pairId.slice(0, 6)}` : "usuario");
+      const pairAvatar = params.get("avatar") || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(pairUsername)}`;
+
+      if (pairId && pairId !== currentUser.id) {
+        const contactUser: UserProfile = {
+          id: pairId,
+          username: pairUsername,
+          firstName: pairName,
+          lastName: "",
+          email: `${pairUsername}@degvs.app`,
+          avatarUrl: pairAvatar,
+          status: "online",
+        };
+
+        storageService.saveContact(contactUser);
+        const directRoomId = getDirectChatRoomId(currentUser.id, pairId);
+
+        let directRoom = rooms.find((r) => r.id === directRoomId);
+        if (!directRoom) {
+          directRoom = {
+            id: directRoomId,
+            name: pairName,
+            avatarUrl: pairAvatar,
+            unreadCount: 0,
+            participants: [currentUser, contactUser],
+            lastMessage: "Chat en tiempo real conectado 🚀",
+            lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          };
+          setRooms((prev) => [directRoom!, ...prev.filter((r) => r.id !== directRoomId)]);
+          storageService.saveRoom(directRoom);
+          saveRoomToFirestore(directRoom);
+        }
+
+        setActiveChatId(directRoomId);
+
+        // Clear hash to prevent repeated pairing triggers
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, "", window.location.pathname);
+        }
+      }
+    };
+
+    handleDeepLinkPairing();
+    window.addEventListener("hashchange", handleDeepLinkPairing);
+    return () => window.removeEventListener("hashchange", handleDeepLinkPairing);
+  }, [currentUser, rooms]);
 
   // Firestore Real-Time Room Messages Listener
   useEffect(() => {

@@ -136,18 +136,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     if (currentUser) {
-      const payload = JSON.stringify({
-        type: "degv_chat_user",
-        id: currentUser.id,
-        username: currentUser.username,
-        name: `${currentUser.firstName} ${currentUser.lastName || ""}`.trim(),
-        email: currentUser.email || `${currentUser.username}@degvs.app`,
-        phone: currentUser.phone || "",
-        url: `https://degvs.app/u/${currentUser.username}`,
-      });
+      const origin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "https://degvs.app";
+      const name = `${currentUser.firstName || ""} ${currentUser.lastName || ""}`.trim() || currentUser.username || "Usuario";
+
+      // Safety check: Never encode base64 image data in QR Code to avoid "amount of data is too big" errors
+      let safeAvatar = "";
+      if (currentUser.avatarUrl && !currentUser.avatarUrl.startsWith("data:") && currentUser.avatarUrl.length < 120) {
+        safeAvatar = `&avatar=${encodeURIComponent(currentUser.avatarUrl)}`;
+      }
+
+      let payload = `${origin}/#pair=${encodeURIComponent(currentUser.id)}&name=${encodeURIComponent(name)}&user=${encodeURIComponent(currentUser.username)}${safeAvatar}`;
+
+      // Fallback: If URL exceeds 350 chars, keep only essential pair ID and user
+      if (payload.length > 350) {
+        payload = `${origin}/#pair=${encodeURIComponent(currentUser.id)}&user=${encodeURIComponent(currentUser.username)}`;
+      }
 
       QRCode.toDataURL(payload, {
-        errorCorrectionLevel: "M",
+        errorCorrectionLevel: "L",
         width: 320,
         margin: 2,
         color: {
@@ -156,7 +162,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         },
       })
         .then((url) => setProfileQrUrl(url))
-        .catch((err) => console.error("Error generating profile QR:", err));
+        .catch((err) => {
+          console.warn("Retrying profile QR generation with compact payload:", err);
+          const minimalPayload = `${typeof window !== "undefined" ? window.location.origin : "https://degvs.app"}/#pair=${encodeURIComponent(currentUser.id)}`;
+          QRCode.toDataURL(minimalPayload, {
+            errorCorrectionLevel: "L",
+            width: 320,
+            margin: 2,
+          })
+            .then((url) => setProfileQrUrl(url))
+            .catch((e) => console.error("Error generating fallback profile QR:", e));
+        });
     }
   }, [currentUser]);
 

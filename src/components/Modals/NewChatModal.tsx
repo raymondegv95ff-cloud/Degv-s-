@@ -69,17 +69,24 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
   const animFrameRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Helper to construct standard QR JSON payload for any user
+  // Helper to construct standard compact QR code payload / live direct pairing URL
   const buildUserQrPayload = (user: UserProfile) => {
-    return JSON.stringify({
-      type: "degv_chat_user",
-      id: user.id,
-      username: user.username,
-      name: `${user.firstName} ${user.lastName}`.trim(),
-      email: user.email || `${user.username}@degvs.app`,
-      phone: user.phone || "",
-      url: `https://degvs.app/u/${user.username}`,
-    });
+    const origin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "https://degvs.app";
+    const name = `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.username || "Usuario";
+
+    // Safety check: Never encode base64 image data in QR Code to avoid "amount of data is too big" errors
+    let safeAvatar = "";
+    if (user.avatarUrl && !user.avatarUrl.startsWith("data:") && user.avatarUrl.length < 120) {
+      safeAvatar = `&avatar=${encodeURIComponent(user.avatarUrl)}`;
+    }
+
+    const payload = `${origin}/#pair=${encodeURIComponent(user.id)}&name=${encodeURIComponent(name)}&user=${encodeURIComponent(user.username)}${safeAvatar}`;
+
+    // Fallback: If URL exceeds 350 chars, keep only essential pair ID and user
+    if (payload.length > 350) {
+      return `${origin}/#pair=${encodeURIComponent(user.id)}&user=${encodeURIComponent(user.username)}`;
+    }
+    return payload;
   };
 
   // Generate QR Code for Current User ("Mi QR")
@@ -87,7 +94,7 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
     if (currentUser) {
       const payload = buildUserQrPayload(currentUser);
       QRCode.toDataURL(payload, {
-        errorCorrectionLevel: "M",
+        errorCorrectionLevel: "L",
         width: 320,
         margin: 2,
         color: {
@@ -96,7 +103,17 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
         },
       })
         .then((url) => setMyQrUrl(url))
-        .catch((err) => console.error("Error generating user QR:", err));
+        .catch((err) => {
+          console.warn("Retrying QR generation with compact payload:", err);
+          const minimalPayload = `${typeof window !== "undefined" ? window.location.origin : "https://degvs.app"}/#pair=${encodeURIComponent(currentUser.id)}`;
+          QRCode.toDataURL(minimalPayload, {
+            errorCorrectionLevel: "L",
+            width: 320,
+            margin: 2,
+          })
+            .then((url) => setMyQrUrl(url))
+            .catch((e) => console.error("Error generating user QR fallback:", e));
+        });
     }
   }, [currentUser]);
 
@@ -105,7 +122,7 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
     if (previewUser) {
       const payload = buildUserQrPayload(previewUser);
       QRCode.toDataURL(payload, {
-        errorCorrectionLevel: "M",
+        errorCorrectionLevel: "L",
         width: 320,
         margin: 2,
         color: {
@@ -114,7 +131,17 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
         },
       })
         .then((url) => setPreviewUserQrUrl(url))
-        .catch((err) => console.error("Error generating preview QR:", err));
+        .catch((err) => {
+          console.warn("Retrying preview QR generation with compact payload:", err);
+          const minimalPayload = `${typeof window !== "undefined" ? window.location.origin : "https://degvs.app"}/#pair=${encodeURIComponent(previewUser.id)}`;
+          QRCode.toDataURL(minimalPayload, {
+            errorCorrectionLevel: "L",
+            width: 320,
+            margin: 2,
+          })
+            .then((url) => setPreviewUserQrUrl(url))
+            .catch((e) => console.error("Error generating preview QR fallback:", e));
+        });
     } else {
       setPreviewUserQrUrl("");
     }
@@ -163,15 +190,41 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
     let targetEmail = "";
     let targetName = "";
     let targetPhone = "";
+    let targetAvatar = "";
 
+    // 1. Check if payload is a URL with hash/query parameters (e.g., #pair=usr_123&name=... or ?pair=...)
+    if (cleanStr.includes("pair=") || cleanStr.includes("room=") || cleanStr.includes("/u/")) {
+      try {
+        const urlObj = new URL(cleanStr.startsWith("http") ? cleanStr : `https://degvs.app/${cleanStr.replace(/^\//, "")}`);
+        const hashStr = urlObj.hash ? urlObj.hash.replace(/^#/, "") : "";
+        const hashParams = new URLSearchParams(hashStr);
+        const searchParams = urlObj.searchParams;
+
+        targetId = hashParams.get("pair") || searchParams.get("pair") || "";
+        targetName = hashParams.get("name") || searchParams.get("name") || "";
+        targetUsername = hashParams.get("user") || searchParams.get("user") || "";
+        targetAvatar = hashParams.get("avatar") || searchParams.get("avatar") || "";
+        targetEmail = hashParams.get("email") || searchParams.get("email") || "";
+        targetPhone = hashParams.get("phone") || searchParams.get("phone") || "";
+
+        if (!targetUsername && urlObj.pathname.startsWith("/u/")) {
+          targetUsername = urlObj.pathname.replace("/u/", "").trim();
+        }
+      } catch (err) {
+        console.warn("[QR Scanner] Error parsing pair URL:", err);
+      }
+    }
+
+    // 2. Check if payload is a JSON string
     try {
       if (cleanStr.startsWith("{")) {
         const parsed = JSON.parse(cleanStr);
-        targetUsername = parsed.username || "";
-        targetId = parsed.id || "";
-        targetEmail = parsed.email || "";
-        targetName = parsed.name || (parsed.firstName ? `${parsed.firstName} ${parsed.lastName || ''}`.trim() : "");
-        targetPhone = parsed.phone || "";
+        targetUsername = targetUsername || parsed.username || "";
+        targetId = targetId || parsed.id || "";
+        targetEmail = targetEmail || parsed.email || "";
+        targetName = targetName || parsed.name || (parsed.firstName ? `${parsed.firstName} ${parsed.lastName || ""}`.trim() : "");
+        targetPhone = targetPhone || parsed.phone || "";
+        targetAvatar = targetAvatar || parsed.avatarUrl || "";
       }
     } catch {}
 
@@ -202,7 +255,7 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
       const safeId = (!isSelfMatch && targetId) ? targetId : `usr_contact_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
       const derivedUsername = targetUsername
         ? (isSelfMatch ? `${targetUsername}_contact` : targetUsername)
-        : (cleanStr.length < 25 ? cleanStr.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() : `usr_${Date.now().toString(36)}`);
+        : (cleanStr.length < 25 && !cleanStr.includes("http") ? cleanStr.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() : `usr_${Date.now().toString(36)}`);
       const derivedName = targetName
         ? (isSelfMatch ? `${targetName} (Contacto)` : targetName)
         : (targetUsername ? `@${targetUsername}` : "Contacto Escaneado");
@@ -215,7 +268,7 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
         email: targetEmail || `${derivedUsername}@degvs.app`,
         phone: targetPhone || "+58 412 0000000",
         countryCode: "+58",
-        avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(derivedUsername)}`,
+        avatarUrl: targetAvatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(derivedUsername)}`,
         status: "online",
       };
 
@@ -428,9 +481,11 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
   const myEmail = currentUser?.email || "usuario@degvs.app";
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText(`https://degvs.app/u/${myUsername}`);
+    if (!currentUser) return;
+    const livePairUrl = buildUserQrPayload(currentUser);
+    navigator.clipboard.writeText(livePairUrl);
     setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
+    setTimeout(() => setCopiedLink(false), 2500);
   };
 
   const downloadQrCode = (dataUrl: string, filename: string) => {
@@ -912,7 +967,7 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
                 className="py-2.5 rounded-2xl bg-slate-800 text-slate-100 font-bold text-xs flex items-center justify-center gap-2 hover:bg-slate-700 transition"
               >
                 <Scan className="w-4 h-4 text-[#00E676]" />
-                <span>Simular Escaneo</span>
+                <span>Conectar Chat en Vivo</span>
               </button>
 
               {previewUserQrUrl && (
