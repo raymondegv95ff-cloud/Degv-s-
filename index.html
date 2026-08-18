@@ -45,58 +45,24 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        let refreshing = false;
-
-        // Auto reload when new SW takes control of client
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (!refreshing) {
-            refreshing = true;
-            console.log('[PWA] New version activated, reloading application...');
-            window.location.reload();
-          }
-        });
-
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .then(reg => {
               console.log('[PWA] Service Worker registered scope:', reg.scope);
-
-              // Check for SW updates on load
               reg.update();
-
-              // Listen for new worker installation
-              reg.addEventListener('updatefound', () => {
-                const newWorker = reg.installing;
-                if (newWorker) {
-                  newWorker.addEventListener('statechange', () => {
-                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                      console.log('[PWA] New update available! Activating immediately...');
-                      newWorker.postMessage({ type: 'SKIP_WAITING' });
-                    }
-                  });
-                }
-              });
             })
-            .catch(err => console.error('[PWA] Service Worker registration failed:', err));
+            .catch(err => console.warn('[PWA] Service Worker registration notice:', err));
 
           // Check for update every time PWA gains focus (app re-opened from background)
           document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
               navigator.serviceWorker.getRegistration().then(reg => {
                 if (reg) {
-                  console.log('[PWA] Visibility changed to visible, checking for publish updates...');
                   reg.update();
                 }
               });
             }
           });
-
-          // Periodic check every 10 minutes while app is running
-          setInterval(() => {
-            navigator.serviceWorker.getRegistration().then(reg => {
-              if (reg) reg.update();
-            });
-          }, 10 * 60 * 1000);
         });
       }
     </script>

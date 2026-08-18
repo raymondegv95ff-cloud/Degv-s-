@@ -40,7 +40,7 @@ export const PublishDeployModal: React.FC<PublishDeployModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>("all");
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [customRepoUrl, setCustomRepoUrl] = useState<string>("https://github.com/tu-usuario/degvs-messenger.git");
+  const [customRepoUrl, setCustomRepoUrl] = useState<string>("https://github.com/raymondegv95ff-cloud/Degv-s-Messenger-APK.git");
 
   if (!isOpen) return null;
 
@@ -55,23 +55,23 @@ export const PublishDeployModal: React.FC<PublishDeployModalProps> = ({
   const platforms = [
     {
       id: "github_antigravity",
-      name: "Enlace Directo con GitHub & Google Antigravity",
+      name: "Enlace Directo con GitHub & Repositorio Oficial",
       category: "GitHub & AI Engine",
       icon: <FolderGit2 className="w-5 h-5 text-emerald-400" />,
-      tag: "CI/CD & Agente IA",
+      tag: "CI/CD & APK Automático",
       tagColor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
       description:
-        "Sincroniza el código fuente con GitHub y activa compilaciones automáticas de APK en GitHub Actions junto al motor de IA Google Antigravity.",
-      actionText: "Crear Repo en GitHub",
-      actionUrl: "https://github.com/new",
-      command: `chmod +x sync-github.sh\n./sync-github.sh ${customRepoUrl}`,
+        "Repositorio oficial configurado: raymondegv95ff-cloud/Degv-s-Messenger-APK con pipelines automáticos de compilación de APK en GitHub Actions y despliegue a GitHub Pages.",
+      actionText: "Ver Repositorio en GitHub",
+      actionUrl: "https://github.com/raymondegv95ff-cloud/Degv-s-Messenger-APK",
+      command: `gh repo clone raymondegv95ff-cloud/Degv-s-Messenger-APK\ncd Degv-s-Messenger-APK\n./sync-github.sh https://github.com/raymondegv95ff-cloud/Degv-s-Messenger-APK.git`,
       steps: [
-        "Crea un nuevo repositorio vacío en GitHub (público o privado).",
-        "Ejecuta el script './sync-github.sh <TU_URL_GITHUB>' para subir todo el proyecto con un solo comando.",
-        "GitHub Actions compilará automáticamente el APK de Android en cada push (.github/workflows/build-apk.yml) y lo pondrá listo para descargar.",
-        "El motor Google Antigravity mantiene la arquitectura full-stack, claves de API seguras y modelos Gemini.",
+        "Repositorio configurado: https://github.com/raymondegv95ff-cloud/Degv-s-Messenger-APK",
+        "Clona el repositorio en cualquier entorno con: 'gh repo clone raymondegv95ff-cloud/Degv-s-Messenger-APK'",
+        "Ejecuta './sync-github.sh' para sincronizar todos los ficheros (Capacitor, Appflow, Termux, Workflows) con un solo clic.",
+        "GitHub Actions compilará automáticamente el APK de Android (.github/workflows/build-apk.yml) en cada push.",
       ],
-      details: "Archivos vinculados: .github/workflows/build-apk.yml, .github/workflows/deploy-pages.yml, antigravity.config.json, ANTIGRAVITY.md",
+      details: "Archivos vinculados: .github/workflows/build-apk.yml, .github/workflows/deploy-pages.yml, sync-github.sh, README.md",
     },
     {
       id: "appflow",

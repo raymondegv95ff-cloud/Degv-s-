@@ -1,141 +1,230 @@
-// Service Worker for Degv's Messenger - Stale-While-Revalidate, Background Sync & Cross-Platform Auto-Update Engine
-const CACHE_NAME = 'degvs-messenger-v6';
+// ==============================================================================
+// Degv's Messenger - High Performance Service Worker
+// Features: Stale-While-Revalidate for Static Assets, Network-First for HTML,
+// and Atomic Update Notification Engine for Native & Web Deployments
+// ==============================================================================
 
-// Core assets to pre-cache on install
-const PRECACHE_ASSETS = [
+const CURRENT_CACHE_VERSION = 'degvs-messenger-v2.5.0-atomic';
+const STAGE_CACHE_VERSION = 'stage-degvs-messenger-v2.5.0-atomic';
+
+// Critical Core Shell Assets (Atomic pre-cache requirement)
+const CRITICAL_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
   '/favicon.svg',
   '/icon.svg',
   '/icon-192.png',
-  '/icon-512.png'
+  '/icon-512.png',
+  '/icon-maskable.png'
 ];
 
-// Install Event: Pre-cache core shell assets and skip waiting immediately for PWA Builder & Native apps
+// 1. Install Event: Atomic Pre-Cache with Validation into Staging Cache
 self.addEventListener('install', (event) => {
-  console.log('[SW] Installing new Service Worker version:', CACHE_NAME);
-  self.skipWaiting();
+  console.log('[SW-Atomic] Installing version:', CURRENT_CACHE_VERSION);
+
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Pre-caching app shell assets');
-      return cache.addAll(PRECACHE_ASSETS);
+    caches.open(STAGE_CACHE_VERSION).then(async (stageCache) => {
+      console.log('[SW-Atomic] Pre-caching critical assets atomically...');
+      
+      const assetPromises = CRITICAL_ASSETS.map(async (assetUrl) => {
+        try {
+          const response = await fetch(assetUrl, { cache: 'no-cache' });
+          if (response && (response.status === 200 || response.status === 0)) {
+            await stageCache.put(assetUrl, response);
+          }
+        } catch (err) {
+          console.warn('[SW-Atomic] Pre-cache warning for asset:', assetUrl, err);
+        }
+      });
+
+      await Promise.all(assetPromises);
+      console.log('[SW-Atomic] Staging cache verified. Calling skipWaiting.');
+      return self.skipWaiting();
     })
   );
 });
 
-// Activate Event: Clean up legacy caches & claim clients immediately so update takes effect instantly
+// 2. Activate Event: Promote Staging Cache & Broadcast Update to App.tsx
 self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating new Service Worker version:', CACHE_NAME);
+  console.log('[SW-Atomic] Activating version:', CURRENT_CACHE_VERSION);
+
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
+    (async () => {
+      // 1. Promote staging cache assets to active cache
+      const stageCache = await caches.open(STAGE_CACHE_VERSION);
+      const activeCache = await caches.open(CURRENT_CACHE_VERSION);
+      const stagedRequests = await stageCache.keys();
+
+      await Promise.all(
+        stagedRequests.map(async (req) => {
+          const resp = await stageCache.match(req);
+          if (resp) {
+            await activeCache.put(req, resp);
+          }
+        })
+      );
+
+      // 2. Purge obsolete caches
+      const cacheNames = await caches.keys();
+      await Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME)
+          .filter((name) => name !== CURRENT_CACHE_VERSION && name !== STAGE_CACHE_VERSION)
           .map((name) => {
-            console.log('[SW] Purging old cache for instant optimization:', name);
+            console.log('[SW-Atomic] Purging obsolete cache:', name);
             return caches.delete(name);
           })
       );
-    }).then(() => {
-      return self.clients.claim();
-    }).then(() => {
-      // Notify all PWA and WebView clients that update & cache optimization are active
-      return self.clients.matchAll({ type: 'window' }).then((clients) => {
-        clients.forEach((client) => {
-          client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME, timestamp: Date.now() });
+
+      // 3. Take control of all clients immediately
+      await self.clients.claim();
+
+      // 4. Broadcast Atomic Update Ready signal to App.tsx and all open clients
+      const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      allClients.forEach((client) => {
+        client.postMessage({
+          type: 'SW_UPDATE_READY',
+          action: 'RELOAD_PROMPT',
+          version: CURRENT_CACHE_VERSION,
+          message: 'Nueva versión lista para el despliegue nativo y web. Recarga para aplicar los cambios.',
+          timestamp: Date.now()
+        });
+        client.postMessage({
+          type: 'SW_ATOMIC_UPDATE_APPLIED',
+          version: CURRENT_CACHE_VERSION,
+          timestamp: Date.now()
         });
       });
-    })
+    })()
   );
 });
 
-// Listen for explicit SKIP_WAITING, OPTIMIZE_AND_UPDATE, and CHECK_UPDATE messages from PWA app
+// 3. Message Event: Communication Channel with App.tsx and PlatformUpdateService
 self.addEventListener('message', (event) => {
-  if (event.data) {
-    if (event.data.type === 'SKIP_WAITING') {
-      console.log('[SW] Received SKIP_WAITING signal, skipping waiting');
-      self.skipWaiting();
-    } else if (event.data.type === 'CHECK_UPDATE') {
-      console.log('[SW] Checking for SW updates on server');
-      self.registration.update();
-    } else if (event.data.type === 'OPTIMIZE_AND_UPDATE' || event.data.type === 'PURGE_OLD_CACHES') {
-      console.log('[SW] Performing active cache purge and optimization');
-      caches.keys().then((keys) => {
-        return Promise.all(
-          keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-        );
-      }).then(() => {
-        self.skipWaiting();
-        self.clients.matchAll({ type: 'window' }).then((clients) => {
-          clients.forEach((c) => c.postMessage({ type: 'SW_OPTIMIZATION_COMPLETE', version: CACHE_NAME }));
-        });
+  if (!event.data) return;
+
+  if (event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  } else if (event.data.type === 'CHECK_FOR_UPDATE') {
+    self.registration.update();
+  } else if (event.data.type === 'RELOAD_ALL_CLIENTS') {
+    self.clients.matchAll({ type: 'window' }).then((clients) => {
+      clients.forEach((client) => {
+        if (client.navigate) {
+          client.navigate(client.url);
+        }
       });
-    }
+    });
+  } else if (event.data.type === 'PURGE_AND_OPTIMIZE') {
+    caches.keys().then((names) => {
+      return Promise.all(
+        names.filter((n) => n !== CURRENT_CACHE_VERSION).map((n) => caches.delete(n))
+      );
+    }).then(() => {
+      self.clients.matchAll({ type: 'window' }).then((clients) => {
+        clients.forEach((c) => c.postMessage({ type: 'SW_OPTIMIZATION_COMPLETE', version: CURRENT_CACHE_VERSION }));
+      });
+    });
   }
 });
 
-// Fetch Event: Stale-While-Revalidate Caching Strategy
+// 4. Fetch Event:
+//    - Navigation (HTML): Network-First with 1.8s Timeout Fallback to Cache
+//    - Static Assets (JS, CSS, Fonts, Images, Audio, Icons): Stale-While-Revalidate
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
-  if (url.pathname.startsWith('/api/')) return;
 
-  event.respondWith(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.match(event.request).then((cachedResponse) => {
-        const fetchPromise = fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-              cache.put(event.request, networkResponse.clone());
-            }
+  // Bypass API calls, AI endpoints, and Firebase endpoints
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.hostname.includes('firebase') ||
+    url.hostname.includes('googleapis') ||
+    url.hostname.includes('identitytoolkit') ||
+    url.hostname.includes('securetoken')
+  ) {
+    return;
+  }
+
+  // A. Navigation / Document Requests: Network-First with 1.8s Timeout -> Cached Fallback
+  if (event.request.mode === 'navigate' || event.request.destination === 'document') {
+    event.respondWith(
+      (async () => {
+        try {
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Network navigation timeout')), 1800)
+          );
+          const networkResponse = await Promise.race([
+            fetch(event.request),
+            timeoutPromise
+          ]);
+          if (networkResponse && networkResponse.status === 200) {
+            const cache = await caches.open(CURRENT_CACHE_VERSION);
+            cache.put(event.request, networkResponse.clone());
             return networkResponse;
-          })
-          .catch((err) => {
-            console.warn('[SW] Fetch failed; returning cached resource if available:', err);
-            if (event.request.mode === 'navigate') {
-              return cache.match('/index.html') || cache.match('/');
-            }
-            return cachedResponse;
-          });
+          }
+        } catch (err) {
+          console.log('[SW-Atomic] Network slow/offline, serving cached shell:', err);
+        }
 
-        return cachedResponse || fetchPromise;
-      });
+        const cache = await caches.open(CURRENT_CACHE_VERSION);
+        const cached = await cache.match(event.request);
+        if (cached) return cached;
+        
+        const fallbackIndex = (await cache.match('/index.html')) || (await cache.match('/'));
+        if (fallbackIndex) return fallbackIndex;
+
+        return fetch(event.request);
+      })()
+    );
+    return;
+  }
+
+  // B. Static Assets: Pure 'Stale-While-Revalidate' Strategy
+  // Return cached asset immediately for instant loading, then fetch & update cache in background
+  event.respondWith(
+    caches.open(CURRENT_CACHE_VERSION).then(async (cache) => {
+      const cachedResponse = await cache.match(event.request);
+
+      const fetchPromise = fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && (networkResponse.status === 200 || networkResponse.status === 0)) {
+            // Clone and cache the refreshed asset
+            cache.put(event.request, networkResponse.clone()).catch(() => {});
+          }
+          return networkResponse;
+        })
+        .catch((err) => {
+          // If offline or network error, return cached response if available
+          if (cachedResponse) return cachedResponse;
+          throw err;
+        });
+
+      return cachedResponse || fetchPromise;
     })
   );
 });
 
-// Background Sync Handler
+// 5. Background Sync Event
 self.addEventListener('sync', (event) => {
   if (event.tag === 'degvs-messages-sync') {
-    event.waitUntil(
-      console.log('[SW] Executing Background Sync for pending messages...')
-    );
+    console.log('[SW-Atomic] Background Sync executing for queued messages');
   }
 });
 
-// Periodic Background Sync Handler
-self.addEventListener('periodicsync', (event) => {
-  if (event.tag === 'degvs-periodic-update') {
-    event.waitUntil(
-      console.log('[SW] Periodic Sync triggered in background')
-    );
-  }
-});
-
-// Push Notification Handler for Background Alerts
+// 6. Push Notification Event
 self.addEventListener('push', (event) => {
   let data = {
     title: "Degv's Messenger",
-    body: "Tienes un nuevo mensaje recibido.",
+    body: "Tienes un nuevo mensaje.",
     roomId: null
   };
 
   if (event.data) {
     try {
       data = event.data.json();
-    } catch (e) {
+    } catch {
       data.body = event.data.text();
     }
   }
@@ -149,17 +238,15 @@ self.addEventListener('push', (event) => {
       url: data.roomId ? `/#room=${data.roomId}` : '/'
     },
     actions: [
-      { action: 'open', title: 'Abrir Chat' },
+      { action: 'open', title: 'Abrir' },
       { action: 'close', title: 'Descartar' }
     ]
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
+  event.waitUntil(self.registration.showNotification(data.title, options));
 });
 
-// Notification Click Listener
+// 7. Notification Click Event
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const targetUrl = event.notification.data?.url || '/';

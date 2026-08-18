@@ -69,6 +69,7 @@ interface SettingsModalProps {
   onOpenStorageCleaner?: () => void;
   onLogout: () => void;
   readReceipts?: boolean;
+  readReceiptsEnabled?: boolean;
   onToggleReadReceipts?: () => void;
   onUpdateAvatar?: (avatarUrl: string) => void;
 }

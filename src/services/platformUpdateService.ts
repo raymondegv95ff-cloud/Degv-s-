@@ -184,9 +184,17 @@ export class PlatformUpdateService {
 
       // Listen to postMessages from SW
       navigator.serviceWorker.addEventListener("message", (event) => {
-        if (event.data?.type === "SW_UPDATED" || event.data?.type === "SW_UPDATE_AVAILABLE") {
+        if (event.data?.type === "SW_UPDATE_READY" || event.data?.type === "SW_UPDATED" || event.data?.type === "SW_UPDATE_AVAILABLE") {
           this.state.isUpdateAvailable = true;
-          this.state.newVersion = event.data.version || "Nueva Versión";
+          this.state.newVersion = event.data.version || "v2.5.0";
+          this.notifySubscribers();
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("DEGV_SW_UPDATE_READY", { detail: event.data }));
+          }
+        } else if (event.data?.type === "SW_ATOMIC_UPDATE_APPLIED") {
+          console.log("[PlatformUpdate] Atomic background update applied seamlessly:", event.data.version);
+          this.state.lastOptimizedAt = Date.now();
+          this.state.isUpdateAvailable = false;
           this.notifySubscribers();
         }
       });

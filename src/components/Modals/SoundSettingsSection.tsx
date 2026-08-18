@@ -37,7 +37,7 @@ export const SoundSettingsSection: React.FC<SoundSettingsSectionProps> = ({
 
   const activeCategoryPresets = SOUND_PRESETS.filter((p) => p.category === selectedCategory);
   const customSoundsForCategory = soundSettings.customSounds.filter(
-    (c) => c.category === selectedCategory || c.category === "all"
+    (c) => c.category === selectedCategory || (c.category as string) === "all"
   );
 
   const getActiveSoundIdForCategory = (cat: SoundCategory): string => {

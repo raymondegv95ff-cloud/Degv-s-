@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { UserProfile } from "../../types";
-import { User, Mail, Lock, Sparkles, ArrowRight, LogIn, UserPlus, ShieldCheck } from "lucide-react";
+import { User, Mail, Lock, Sparkles, ArrowRight, LogIn, UserPlus, ShieldCheck, Loader2 } from "lucide-react";
+import { loginWithFirebase, registerWithFirebase, loginGuestWithFirebase } from "../../services/firebase";
 
 interface PhoneAuthModalProps {
   isOpen: boolean;
@@ -12,6 +13,7 @@ const USERS_DB_KEY = "degvs_messenger_registered_users";
 export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComplete }) => {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   // Form Fields
   const [username, setUsername] = useState("");
@@ -38,7 +40,7 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComple
     localStorage.setItem(USERS_DB_KEY, JSON.stringify(updated));
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -52,40 +54,46 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComple
       return;
     }
 
-    const registeredUsers = getRegisteredUsers();
-    const foundUser = registeredUsers.find(
-      (u) =>
-        u.username?.toLowerCase() === identifier ||
-        u.email?.toLowerCase() === identifier
-    );
+    setLoading(true);
+    try {
+      // 1. Try Real Firebase Auth SDK first
+      const firebaseUser = await loginWithFirebase(identifier, password);
+      saveRegisteredUser(firebaseUser);
+      onComplete(firebaseUser);
+    } catch (fbError: any) {
+      console.warn("Firebase Auth attempt notice:", fbError?.message);
 
-    if (foundUser) {
-      if (foundUser.password && foundUser.password !== password) {
-        setError("Contraseña incorrecta. Intenta nuevamente.");
+      // 2. Fallback check in local storage if offline or specific Firebase error
+      const registeredUsers = getRegisteredUsers();
+      const foundUser = registeredUsers.find(
+        (u) =>
+          u.username?.toLowerCase() === identifier ||
+          u.email?.toLowerCase() === identifier
+      );
+
+      if (foundUser) {
+        if (foundUser.password && foundUser.password !== password) {
+          setError("Contraseña incorrecta. Intenta nuevamente.");
+          setLoading(false);
+          return;
+        }
+        onComplete(foundUser);
+        setLoading(false);
         return;
       }
-      onComplete(foundUser);
-      return;
+
+      // If user provided a password of at least 6 characters, allow graceful creation
+      if (fbError?.code === "auth/user-not-found" || fbError?.code === "auth/invalid-credential") {
+        setError("Usuario o contraseña no encontrados. Si es tu primera vez, haz clic en 'Registrarse'.");
+      } else {
+        setError(fbError?.message || "Error al autenticar. Verifica tu conexión a internet.");
+      }
+    } finally {
+      setLoading(false);
     }
-
-    // Default demo user login if no registered account matched
-    const demoUser: UserProfile = {
-      id: `usr_${Date.now()}`,
-      username: identifier.includes("@") ? identifier.split("@")[0] : identifier,
-      email: identifier.includes("@") ? identifier : `${identifier}@degvs.app`,
-      password,
-      firstName: identifier,
-      lastName: "",
-      avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-      bio: "¡Hola! Estoy usando Degv's Messenger 🚀",
-      status: "online",
-    };
-
-    saveRegisteredUser(demoUser);
-    onComplete(demoUser);
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -100,35 +108,67 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComple
       setError("Por favor ingresa un correo electrónico válido.");
       return;
     }
-    if (!password || password.length < 4) {
-      setError("La contraseña debe tener al menos 4 caracteres.");
+    if (!password || password.length < 6) {
+      setError("La contraseña de Firebase debe tener al menos 6 caracteres.");
       return;
     }
 
-    const registeredUsers = getRegisteredUsers();
-    const existing = registeredUsers.find(
-      (u) => u.username?.toLowerCase() === cleanUsername || u.email?.toLowerCase() === cleanEmail
-    );
-
-    if (existing) {
-      setError("El nombre de usuario o correo electrónico ya está registrado. Intenta iniciar sesión.");
-      return;
+    setLoading(true);
+    try {
+      // 1. Register in Firebase Auth & Firestore
+      const newUser = await registerWithFirebase(cleanUsername, cleanEmail, password);
+      saveRegisteredUser(newUser);
+      onComplete(newUser);
+    } catch (fbError: any) {
+      console.warn("Firebase Registration notice:", fbError?.message);
+      if (fbError?.code === "auth/email-already-in-use") {
+        setError("El correo electrónico ya está registrado en Firebase. Inicia sesión.");
+      } else if (fbError?.code === "auth/weak-password") {
+        setError("La contraseña es muy débil. Usa al menos 6 caracteres.");
+      } else {
+        // Fallback local registration
+        const fallbackUser: UserProfile = {
+          id: `usr_${Date.now()}`,
+          username: cleanUsername,
+          email: cleanEmail,
+          password,
+          firstName: cleanUsername,
+          lastName: "",
+          avatarUrl: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`,
+          bio: "¡Hola! Estoy usando Degv's Messenger 🚀",
+          status: "online",
+        };
+        saveRegisteredUser(fallbackUser);
+        onComplete(fallbackUser);
+      }
+    } finally {
+      setLoading(false);
     }
+  };
 
-    const newUser: UserProfile = {
-      id: `usr_${Date.now()}`,
-      username: cleanUsername,
-      email: cleanEmail,
-      password,
-      firstName: cleanUsername,
-      lastName: "",
-      avatarUrl: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`,
-      bio: "¡Hola! Estoy usando Degv's Messenger 🚀",
-      status: "online",
-    };
-
-    saveRegisteredUser(newUser);
-    onComplete(newUser);
+  const handleGuestLogin = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const guestUser = await loginGuestWithFirebase();
+      saveRegisteredUser(guestUser);
+      onComplete(guestUser);
+    } catch (e: any) {
+      const localGuest: UserProfile = {
+        id: `guest_${Date.now()}`,
+        username: `invitado_${Math.floor(Math.random() * 1000)}`,
+        email: "invitado@degvs.app",
+        firstName: "Invitado",
+        lastName: "",
+        avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+        bio: "Usuario Invitado en Degv's Messenger",
+        status: "online",
+      };
+      saveRegisteredUser(localGuest);
+      onComplete(localGuest);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -240,10 +280,17 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComple
 
             <button
               type="submit"
-              className="w-full py-3.5 rounded-2xl bg-[#00E676] text-black font-black text-xs hover:scale-[1.02] active:scale-95 transition-all shadow-[0_0_20px_rgba(0,230,118,0.3)] flex items-center justify-center gap-2"
+              disabled={loading}
+              className="w-full py-3.5 rounded-2xl bg-[#00E676] text-black font-black text-xs hover:scale-[1.02] active:scale-95 transition-all shadow-[0_0_20px_rgba(0,230,118,0.3)] flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <span>Iniciar Sesión</span>
-              <ArrowRight className="w-4 h-4" />
+              {loading ? (
+                <Loader2 className="w-4 h-4 animate-spin text-black" />
+              ) : (
+                <>
+                  <span>Iniciar Sesión</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </form>
         ) : (
@@ -284,7 +331,7 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComple
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300">Contraseña</label>
+              <label className="text-xs font-semibold text-slate-300">Contraseña (mínimo 6 caracteres)</label>
               <div className="relative flex items-center">
                 <input
                   type="password"
@@ -293,6 +340,7 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComple
                   placeholder="••••••••"
                   className="w-full py-3 pl-10 pr-4 bg-white/5 border border-white/10 rounded-2xl text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-[#00E676] transition"
                   required
+                  minLength={6}
                 />
                 <Lock className="w-4 h-4 absolute left-3 text-slate-500 pointer-events-none" />
               </div>
@@ -300,13 +348,32 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({ isOpen, onComple
 
             <button
               type="submit"
-              className="w-full py-3.5 rounded-2xl bg-[#00E676] text-black font-black text-xs hover:scale-[1.02] active:scale-95 transition-all shadow-[0_0_20px_rgba(0,230,118,0.3)] flex items-center justify-center gap-2"
+              disabled={loading}
+              className="w-full py-3.5 rounded-2xl bg-[#00E676] text-black font-black text-xs hover:scale-[1.02] active:scale-95 transition-all shadow-[0_0_20px_rgba(0,230,118,0.3)] flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <span>Crear Cuenta y Entrar</span>
-              <ArrowRight className="w-4 h-4" />
+              {loading ? (
+                <Loader2 className="w-4 h-4 animate-spin text-black" />
+              ) : (
+                <>
+                  <span>Crear Cuenta y Entrar</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </form>
         )}
+
+        {/* Guest access option */}
+        <div className="text-center pt-2">
+          <button
+            type="button"
+            onClick={handleGuestLogin}
+            disabled={loading}
+            className="text-xs text-slate-400 hover:text-[#00E676] transition underline underline-offset-4"
+          >
+            Entrar como Invitado Anónimo
+          </button>
+        </div>
 
         {/* Security badge footer */}
         <div className="flex items-center justify-center gap-2 text-[10px] text-slate-500 pt-2 border-t border-white/5">

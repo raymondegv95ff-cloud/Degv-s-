@@ -60,8 +60,10 @@ export interface UserStatusItem {
 
 export interface Reaction {
   emoji: string;
-  userId: string;
+  userId?: string;
   userName?: string;
+  count?: number;
+  users?: string[];
 }
 
 export interface PollOption {
@@ -118,6 +120,9 @@ export interface Room {
   isAiChat?: boolean;
   isVaultSecret?: boolean;
   isSecretVault?: boolean;
+  isLocked?: boolean;
+  pinCode?: string;
+  disappearingTimer?: string | number;
   isArchived?: boolean;
   avatarUrl?: string;
   participants: UserProfile[];

@@ -39,7 +39,7 @@ const StatusProgressAvatarRing: React.FC<{
   timestamp: number;
   itemCount?: number;
   size?: number;
-  mediaType?: "text" | "image" | "video" | "music";
+  mediaType?: "text" | "image" | "video" | "music" | "audio";
 }> = ({ avatarUrl, userName, timestamp, itemCount = 1, size = 56, mediaType }) => {
   const TOTAL_24H_MS = 24 * 60 * 60 * 1000;
   const elapsed = Date.now() - timestamp;

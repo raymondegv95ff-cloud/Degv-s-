@@ -4,15 +4,19 @@ import { Lock, Unlock, X, Check } from "lucide-react";
 interface RoomLockSetupModalProps {
   isOpen: boolean;
   isCurrentlyLocked: boolean;
+  roomName?: string;
   onClose: () => void;
-  onSavePin: (pin: string | null) => void;
+  onSavePin?: (pin: string | null) => void;
+  onSaveLockPin?: (pin: string) => void;
 }
 
 export const RoomLockSetupModal: React.FC<RoomLockSetupModalProps> = ({
   isOpen,
   isCurrentlyLocked,
+  roomName,
   onClose,
   onSavePin,
+  onSaveLockPin,
 }) => {
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
@@ -20,12 +24,21 @@ export const RoomLockSetupModal: React.FC<RoomLockSetupModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleSave = (targetPin: string | null) => {
+    if (onSavePin) {
+      onSavePin(targetPin);
+    }
+    if (targetPin && onSaveLockPin) {
+      onSaveLockPin(targetPin);
+    }
+    onClose();
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isCurrentlyLocked) {
       // Unlocking room
-      onSavePin(null);
-      onClose();
+      handleSave(null);
       return;
     }
 
@@ -38,8 +51,7 @@ export const RoomLockSetupModal: React.FC<RoomLockSetupModalProps> = ({
       return;
     }
 
-    onSavePin(pin);
-    onClose();
+    handleSave(pin);
   };
 
   return (

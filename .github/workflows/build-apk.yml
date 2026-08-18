@@ -6,9 +6,19 @@ on:
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      buildType:
+        description: 'Tipo de compilación (debug o release)'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
 
 jobs:
   build-apk:
+    name: Compilar APK Android
     runs-on: ubuntu-latest
 
     steps:
@@ -33,15 +43,17 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
-      - name: Build Web Assets
+      - name: Build Web Production Assets
         run: npm run build
 
-      - name: Install Capacitor CLI & Platform
+      - name: Install Capacitor CLI & Sync Native Android
         run: |
           npm install @capacitor/core @capacitor/android
           npm install -D @capacitor/cli
-          npx cap add android || true
           npx cap sync android
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Build Android APK with Gradle
         run: |

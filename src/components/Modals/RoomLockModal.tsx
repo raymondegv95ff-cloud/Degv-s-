@@ -6,6 +6,7 @@ interface RoomLockModalProps {
   roomName: string;
   roomAvatar?: string;
   expectedPin?: string;
+  correctPin?: string;
   onUnlockSuccess: () => void;
   onClose: () => void;
 }
@@ -15,9 +16,11 @@ export const RoomLockModal: React.FC<RoomLockModalProps> = ({
   roomName,
   roomAvatar,
   expectedPin,
+  correctPin,
   onUnlockSuccess,
   onClose,
 }) => {
+  const effectivePin = expectedPin || correctPin;
   const [pin, setPin] = useState("");
   const [error, setError] = useState(false);
   const [authenticatingBiometrics, setAuthenticatingBiometrics] = useState(false);
@@ -41,7 +44,7 @@ export const RoomLockModal: React.FC<RoomLockModalProps> = ({
   };
 
   const verifyPin = (inputPin: string) => {
-    if (!expectedPin || inputPin === expectedPin) {
+    if (!effectivePin || inputPin === effectivePin) {
       onUnlockSuccess();
       setPin("");
       setError(false);

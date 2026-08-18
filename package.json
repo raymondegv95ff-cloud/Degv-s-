@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "degvs-messenger",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -10,6 +10,8 @@
     "ionic:serve": "vite",
     "appflow:build": "vite build",
     "appflow:sync": "vite build",
+    "validate:integrity": "node scripts/validate-production-integrity.js",
+    "validate:versions": "node scripts/validate-versions-and-manifest.js",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.cjs",
     "lint": "tsc --noEmit"
@@ -32,13 +34,15 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3",
-    "@types/express": "^4.17.21"
+    "vite": "^6.2.3"
   }
 }

@@ -4,7 +4,14 @@ import { storageService } from "./services/storageService";
 import { soundService } from "./services/soundService";
 import { notificationService } from "./services/notificationService";
 import { indexedDbQueueService } from "./services/indexedDbQueueService";
-import { sendMessage as sendFirestoreMessage, listenForMessages } from "./services/firebase";
+import {
+  sendMessage as sendFirestoreMessage,
+  listenForMessages,
+  listenForRoomMessages,
+  updateMessageReactionInFirestore,
+  saveRoomToFirestore,
+  subscribeToFirebaseAuth,
+} from "./services/firebase";
 
 // Sidebar components
 import { SidebarHeader } from "./components/Sidebar/SidebarHeader";
@@ -62,7 +69,7 @@ export const App: React.FC = () => {
   const [accentColorLight, setAccentColorLight] = useState<AccentColorOption>(() => storageService.getAccentColorLight());
   const [accentColorDark, setAccentColorDark] = useState<AccentColorOption>(() => storageService.getAccentColorDark());
   const [soundMuted, setSoundMuted] = useState(() => storageService.getSettings().soundMuted);
-  const [language, setLanguage] = useState<LanguageCode>(() => storageService.getSettings().language || "es");
+  const [language, setLanguage] = useState<LanguageCode>(() => (storageService.getSettings().language as LanguageCode) || "es");
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(() => storageService.getReadReceiptsEnabled());
   const [customFolders, setCustomFolders] = useState<string[]>(() => storageService.getFolders());
   const [statuses, setStatuses] = useState<UserStatusItem[]>(() => storageService.getStatuses());
@@ -103,7 +110,19 @@ export const App: React.FC = () => {
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
 
-  // Firestore Real-Time Message Listener
+  // Firebase Auth State Listener
+  useEffect(() => {
+    const unsubscribe = subscribeToFirebaseAuth((fbUser) => {
+      if (fbUser) {
+        setCurrentUser(fbUser);
+        storageService.saveUser(fbUser);
+        setIsAuthModalOpen(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore Real-Time Message Listener for direct inbox
   useEffect(() => {
     if (!currentUser?.id) return;
     const unsubscribe = listenForMessages(currentUser.id, (incomingMsg) => {
@@ -130,6 +149,25 @@ export const App: React.FC = () => {
 
     return () => unsubscribe();
   }, [currentUser?.id, soundMuted]);
+
+  // Firestore Real-Time Room Messages Listener
+  useEffect(() => {
+    if (!activeChatId) return;
+    const unsubscribe = listenForRoomMessages(activeChatId, (cloudMsgs) => {
+      if (cloudMsgs.length > 0) {
+        setMessagesMap((prev) => {
+          const localMsgs = prev[activeChatId] || [];
+          const mergedMap = new Map<string, Message>();
+          localMsgs.forEach((m) => mergedMap.set(m.id, m));
+          cloudMsgs.forEach((m) => mergedMap.set(m.id, m));
+          const mergedList = Array.from(mergedMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          storageService.saveRoomMessages(activeChatId, mergedList);
+          return { ...prev, [activeChatId]: mergedList };
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, [activeChatId]);
 
   useEffect(() => {
     platformUpdateService.init();
@@ -644,13 +682,39 @@ export const App: React.FC = () => {
       const updated = msgs.map((m) => {
         if (m.id === messageId) {
           const reactions = m.reactions || [];
+          const existingReactionIndex = reactions.findIndex((r) => r.emoji === emoji);
+          let newReactions;
+          if (existingReactionIndex >= 0) {
+            const current = reactions[existingReactionIndex];
+            const hasVoted = current.users.includes(currentUser.id);
+            if (hasVoted) {
+              newReactions = reactions
+                .map((r, idx) =>
+                  idx === existingReactionIndex
+                    ? { ...r, count: r.count - 1, users: r.users.filter((u) => u !== currentUser.id) }
+                    : r
+                )
+                .filter((r) => r.count > 0);
+            } else {
+              newReactions = reactions.map((r, idx) =>
+                idx === existingReactionIndex ? { ...r, count: r.count + 1, users: [...r.users, currentUser.id] } : r
+              );
+            }
+          } else {
+            newReactions = [...reactions, { emoji, count: 1, users: [currentUser.id] }];
+          }
+
+          // Persist to Firestore
+          updateMessageReactionInFirestore(messageId, newReactions);
+
           return {
             ...m,
-            reactions: [...reactions, { emoji, userId: currentUser.id }],
+            reactions: newReactions,
           };
         }
         return m;
       });
+      storageService.saveRoomMessages(activeChatId, updated);
       return { ...prev, [activeChatId]: updated };
     });
   };

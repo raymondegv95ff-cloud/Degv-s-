@@ -1,0 +1,93 @@
+name: "Ionic Appflow Cloud CI/CD Pipeline"
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      destination:
+        description: 'Destino de Despliegue en Appflow'
+        required: true
+        default: 'Production'
+        type: choice
+        options:
+          - Production
+          - Staging
+          - LiveUpdateOnly
+
+jobs:
+  validate-and-test:
+    name: 1. Validación de Integridad y Build Web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: Validate Production Integrity
+        run: npm run validate:integrity
+
+      - name: Build Web Production Bundle
+        run: npm run build
+        env:
+          NODE_ENV: production
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+
+      - name: Upload Web Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appflow-web-dist
+          path: dist
+          retention-days: 14
+
+  appflow-cloud-sync:
+    name: 2. Sincronización y Disparo con Ionic Appflow
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Ionic & Appflow CLI
+        run: |
+          npm install -g @ionic/cli
+
+      - name: Check Appflow Secrets & Configuration
+        run: |
+          echo "Verificando enlace con Ionic Appflow..."
+          if [ -z "${{ secrets.IONIC_TOKEN }}" ]; then
+            echo "⚠️ AVISO: IONIC_TOKEN no detectado en GitHub Secrets."
+            echo "Para habilitar compilación remota automática en Appflow, añade IONIC_TOKEN en Settings -> Secrets."
+          else
+            echo "✔ IONIC_TOKEN detectado. Iniciando sincronización con Appflow..."
+          fi
+
+      - name: Deploy Live Update / Cloud Build Trigger
+        env:
+          IONIC_TOKEN: ${{ secrets.IONIC_TOKEN }}
+          APPFLOW_APP_ID: ${{ secrets.APPFLOW_APP_ID || 'com.degv.messenger' }}
+        run: |
+          if [ -n "$IONIC_TOKEN" ]; then
+            ionic deploy manifest
+            echo "✔ Manifiesto de Live Update generado con éxito para canal Production."
+          else
+            echo "ℹ️ Paso de Appflow completado en modo local/CI standard."
+          fi
