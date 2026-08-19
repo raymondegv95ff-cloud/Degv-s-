@@ -336,25 +336,31 @@ export function listenForUserRooms(
       where("participants", "array-contains", userId)
     );
 
-    return onSnapshot(q, (snapshot) => {
-      const rooms: Room[] = snapshot.docs.map((docSnap) => {
-        const d = docSnap.data();
-        return {
-          id: docSnap.id,
-          name: d.name || "Chat",
-          avatarUrl: d.avatarUrl,
-          lastMessage: d.lastMessage || "",
-          lastMessageTime: d.lastMessageTime || "",
-          unreadCount: d.unreadCount || 0,
-          isGroup: !!d.isGroup,
-          isChannel: !!d.isChannel,
-          isVaultSecret: !!(d.isVaultSecret || d.isSecretVault),
-          participants: d.participants || [userId],
-          timestamp: d.timestamp || Date.now(),
-        };
-      });
-      onRoomsUpdate(rooms);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const rooms: Room[] = snapshot.docs.map((docSnap) => {
+          const d = docSnap.data();
+          return {
+            id: docSnap.id,
+            name: d.name || "Chat",
+            avatarUrl: d.avatarUrl,
+            lastMessage: d.lastMessage || "",
+            lastMessageTime: d.lastMessageTime || "",
+            unreadCount: d.unreadCount || 0,
+            isGroup: !!d.isGroup,
+            isChannel: !!d.isChannel,
+            isVaultSecret: !!(d.isVaultSecret || d.isSecretVault),
+            participants: d.participants || [userId],
+            timestamp: d.timestamp || Date.now(),
+          };
+        });
+        onRoomsUpdate(rooms);
+      },
+      (error) => {
+        console.warn("[Firestore] listenForUserRooms notice:", error.message);
+      }
+    );
   } catch (error) {
     console.warn("[Firestore] Error in listenForUserRooms:", error);
     return () => {};

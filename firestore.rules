@@ -1,40 +1,37 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check if request is authenticated
+    // 1. Helper de validación de autenticación
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Row-level check: verifies if authenticated UID exists in participants of the room
+    // 2. Helper de Row-Level Security para participantes
     function isRoomParticipant(roomId) {
       return isAuthenticated() && (
-        (exists(/databases/$(database)/documents/rooms/$(roomId)) &&
-         request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.participants) ||
         (exists(/databases/$(database)/documents/chats_rooms/$(roomId)) &&
-         request.auth.uid in get(/databases/$(database)/documents/chats_rooms/$(roomId)).data.participants)
+         request.auth.uid in get(/databases/$(database)/documents/chats_rooms/$(roomId)).data.participants) ||
+        (exists(/databases/$(database)/documents/rooms/$(roomId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.participants)
       );
     }
 
-    // Users Collection: profiles and device presence metadata
+    // Colección 'users': Permite lectura y escritura de perfiles y metadatos de presencia
     match /users/{userId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if true;
     }
 
-    // Chat Rooms Collection: accessible to participants
-    match /rooms/{roomId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Chats Rooms Alias Collection
+    // Colección 'chats_rooms': Salas de conversación en tiempo real
     match /chats_rooms/{roomId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if true;
     }
 
-    // Messages Collection: bidirectional real-time communication
+    // Colección 'rooms' (compatibilidad bidireccional)
+    match /rooms/{roomId} {
+      allow read, write: if true;
+    }
+
+    // Colección 'messages': Mensajes en tiempo real
     match /messages/{messageId} {
       allow read, write: if true;
     }
