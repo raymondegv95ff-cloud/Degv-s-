@@ -5,6 +5,7 @@ import { soundService } from "./services/soundService";
 import { notificationService } from "./services/notificationService";
 import { indexedDbQueueService } from "./services/indexedDbQueueService";
 import {
+  db,
   sendMessage as sendFirestoreMessage,
   listenForMessages,
   listenForRoomMessages,
@@ -19,6 +20,16 @@ import {
   findOrCreateDirectRoom,
   listenForUserRooms,
 } from "./services/firebase";
+import {
+  doc,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 
 // Sidebar components
 import { SidebarHeader } from "./components/Sidebar/SidebarHeader";
@@ -290,40 +301,171 @@ export const App: React.FC = () => {
       const search = window.location.search ? window.location.search.replace(/^\?/, "") : "";
       const params = new URLSearchParams(hash || search);
 
-      const pairId = params.get("pair");
-      const pairName = params.get("name") || params.get("user") || "Contacto";
-      const pairUsername = params.get("user") || (pairId ? `user_${pairId.slice(0, 6)}` : "usuario");
+      const pairId = params.get("pair")?.trim();
+      const pairName = params.get("name")?.trim() || params.get("user")?.trim() || "Contacto";
+      const pairUsername = params.get("user")?.trim() || (pairId ? `user_${pairId.slice(0, 6)}` : "usuario");
       const pairAvatar = params.get("avatar") || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(pairUsername)}`;
 
       if (pairId && pairId !== currentUser.id) {
-        // Query Firestore to verify or fetch the real user profile of pairId
-        let targetUser: UserProfile | null = await getFirestoreUser(pairId);
-        if (!targetUser) {
-          targetUser = {
-            id: pairId,
-            username: pairUsername,
-            firstName: pairName,
-            lastName: "",
-            email: `${pairUsername}@degvs.app`,
-            avatarUrl: pairAvatar,
-            status: "online",
-          };
-          // Persist target user in Firestore users collection
-          await registerUser(targetUser);
-        }
+        try {
+          // 1. Validación y consulta real a la colección 'users' de Firestore
+          let targetUser: UserProfile | null = null;
+          const userDocRef = doc(db, "users", pairId);
+          const userSnap = await getDoc(userDocRef);
 
-        storageService.saveContact(targetUser);
+          if (userSnap.exists()) {
+            const d = userSnap.data();
+            targetUser = {
+              id: userSnap.id,
+              username: d.username || pairUsername,
+              firstName: d.firstName || pairName,
+              lastName: d.lastName || "",
+              email: d.email || `${d.username || pairUsername}@degvs.app`,
+              avatarUrl: d.avatarUrl || pairAvatar,
+              bio: d.bio || "",
+              phone: d.phone,
+              status: "online",
+            };
+          } else {
+            // Consulta fallback por username en 'users'
+            const usersRef = collection(db, "users");
+            const qUsers = query(usersRef, where("username", "==", pairId));
+            const querySnap = await getDocs(qUsers);
+            if (!querySnap.empty) {
+              const d = querySnap.docs[0].data();
+              targetUser = {
+                id: querySnap.docs[0].id,
+                username: d.username || pairUsername,
+                firstName: d.firstName || pairName,
+                lastName: d.lastName || "",
+                email: d.email || `${d.username || pairUsername}@degvs.app`,
+                avatarUrl: d.avatarUrl || pairAvatar,
+                bio: d.bio || "",
+                phone: d.phone,
+                status: "online",
+              };
+            }
+          }
 
-        // Find or create shared room in Firestore with participants: [currentUser.id, pairId]
-        const directRoom = await findOrCreateDirectRoom(currentUser, targetUser);
+          // Si el usuario no está aún en 'users', registrarlo formalmente en Firestore
+          if (!targetUser) {
+            targetUser = {
+              id: pairId,
+              username: pairUsername,
+              firstName: pairName,
+              lastName: "",
+              email: `${pairUsername}@degvs.app`,
+              avatarUrl: pairAvatar,
+              status: "online",
+            };
+            await registerUser(targetUser);
+          }
 
-        setRooms((prev) => [directRoom, ...prev.filter((r) => r.id !== directRoom.id)]);
-        storageService.saveRoom(directRoom);
-        setActiveChatId(directRoom.id);
+          storageService.saveContact(targetUser);
 
-        // Clear hash to prevent repeated pairing triggers
-        if (window.history && window.history.replaceState) {
-          window.history.replaceState(null, "", window.location.pathname);
+          // 2. Consulta real a la colección 'chats_rooms' verificando participantes: currentUser.id y pairId
+          let foundRoomId: string | null = null;
+          let foundRoomData: any = null;
+          const targetDisplayName = `${targetUser.firstName || ""} ${targetUser.lastName || ""}`.trim() || targetUser.username;
+
+          const chatsRoomsRef = collection(db, "chats_rooms");
+          const qChatsRooms = query(chatsRoomsRef, where("participants", "array-contains", currentUser.id));
+          const chatsRoomsSnap = await getDocs(qChatsRooms);
+
+          for (const roomDoc of chatsRoomsSnap.docs) {
+            const data = roomDoc.data();
+            const participants = data.participants || [];
+            const hasPair = participants.some((p: any) => {
+              const pId = typeof p === "string" ? p : p?.id;
+              return pId === targetUser!.id || pId === pairId;
+            });
+            if (hasPair) {
+              foundRoomId = roomDoc.id;
+              foundRoomData = data;
+              break;
+            }
+          }
+
+          // Verificación complementaria en colección 'rooms'
+          if (!foundRoomId) {
+            const roomsRef = collection(db, "rooms");
+            const qRooms = query(roomsRef, where("participants", "array-contains", currentUser.id));
+            const roomsSnap = await getDocs(qRooms);
+
+            for (const roomDoc of roomsSnap.docs) {
+              const data = roomDoc.data();
+              const participants = data.participants || [];
+              const hasPair = participants.some((p: any) => {
+                const pId = typeof p === "string" ? p : p?.id;
+                return pId === targetUser!.id || pId === pairId;
+              });
+              if (hasPair) {
+                foundRoomId = roomDoc.id;
+                foundRoomData = data;
+                break;
+              }
+            }
+          }
+
+          let roomObj: Room;
+
+          // 3. Si la sala no existe en Firestore, crearla
+          if (!foundRoomId) {
+            const directRoomId = getDirectChatRoomId(currentUser.id, targetUser.id);
+            const newRoomPayload = {
+              id: directRoomId,
+              name: targetDisplayName,
+              avatarUrl: targetUser.avatarUrl,
+              unreadCount: 0,
+              lastMessage: "Chat en tiempo real conectado 🚀",
+              lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              participants: [currentUser.id, targetUser.id],
+              isGroup: false,
+              isChannel: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            };
+
+            await Promise.allSettled([
+              setDoc(doc(db, "chats_rooms", directRoomId), newRoomPayload, { merge: true }),
+              setDoc(doc(db, "rooms", directRoomId), newRoomPayload, { merge: true }),
+            ]);
+
+            roomObj = {
+              id: directRoomId,
+              name: targetDisplayName,
+              avatarUrl: targetUser.avatarUrl,
+              unreadCount: 0,
+              lastMessage: "Chat en tiempo real conectado 🚀",
+              lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              participants: [currentUser, targetUser],
+              isGroup: false,
+            };
+          } else {
+            roomObj = {
+              id: foundRoomId,
+              name: targetDisplayName,
+              avatarUrl: targetUser.avatarUrl || foundRoomData?.avatarUrl,
+              unreadCount: foundRoomData?.unreadCount || 0,
+              lastMessage: foundRoomData?.lastMessage || "Chat conectado 🚀",
+              lastMessageTime: foundRoomData?.lastMessageTime || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              participants: [currentUser, targetUser],
+              isGroup: false,
+            };
+          }
+
+          // 4. Redirigir al chat resultante
+          setRooms((prev) => [roomObj, ...prev.filter((r) => r.id !== roomObj.id)]);
+          storageService.saveRoom(roomObj);
+          setActiveChatId(roomObj.id);
+          setShowMobileChat(true);
+
+          // Limpiar parámetros de enlace profundo
+          if (window.history && window.history.replaceState) {
+            window.history.replaceState(null, "", window.location.pathname);
+          }
+        } catch (error) {
+          console.warn("[DeepLinkPairing] Error processing deep link pairing:", error);
         }
       }
     };
@@ -754,8 +896,21 @@ export const App: React.FC = () => {
 
     // If online, dispatch message to Firebase Firestore in real-time
     if (isCurrentlyOnline && activeRoom) {
-      const otherParticipant = activeRoom.participants?.find((p) => p && p.id !== currentUser.id);
-      const targetReceiverId = otherParticipant ? otherParticipant.id : "usr_all";
+      let targetReceiverId = "usr_all";
+      if (activeRoom.participants && activeRoom.participants.length > 0) {
+        for (const p of activeRoom.participants) {
+          const pId = typeof p === "string" ? p : p?.id;
+          if (pId && pId !== currentUser.id) {
+            targetReceiverId = pId;
+            break;
+          }
+        }
+      }
+      if (targetReceiverId === "usr_all" && activeChatId.startsWith("dm_")) {
+        const parts = activeChatId.replace(/^dm_/, "").split("_");
+        const found = parts.find((p) => p && p !== currentUser.id);
+        if (found) targetReceiverId = found;
+      }
 
       sendFirestoreMessage(currentUser.id, targetReceiverId, content, {
         id: newMsg.id,

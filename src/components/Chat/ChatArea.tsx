@@ -10,7 +10,7 @@ import { doc, onSnapshot } from "firebase/firestore";
 
 interface ChatAreaProps {
   activeRoom: Room | null;
-  messages: Message[];
+  messages?: Message[];
   currentUserId: string;
   bubbleStyle: BubbleStyle;
   onSendMessage: (content: string, type?: "text" | "image" | "audio" | "file", mediaUrl?: string) => void;
@@ -106,7 +106,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
 
   // Direct onSnapshot Real-Time Listener for messages of active room
-  const [realtimeMessages, setRealtimeMessages] = useState<Message[]>(messages || []);
+  const [realtimeMessages, setRealtimeMessages] = useState<Message[]>([]);
   const [firestoreRoom, setFirestoreRoom] = useState<Room | null>(activeRoom);
 
   useEffect(() => {
@@ -118,15 +118,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     setFirestoreRoom(activeRoom);
 
-    // 1. Listen for Firestore messages on activeRoom.id
+    // 1. Listen in real-time to messages for activeRoom.id directly from Firestore
     const unsubMessages = listenForRoomMessages(activeRoom.id, (cloudMsgs) => {
-      if (cloudMsgs && cloudMsgs.length > 0) {
-        setRealtimeMessages(cloudMsgs);
-      }
+      setRealtimeMessages(cloudMsgs || []);
     });
 
-    // 2. Listen for Firestore room document updates (fetching latest lastMessage directly from DB)
+    // 2. Listen in real-time to room document updates (lastMessage, lastMessageTime, participants)
     let unsubRoom = () => {};
+    let unsubChatsRoom = () => {};
     try {
       const roomDocRef = doc(db, "rooms", activeRoom.id);
       unsubRoom = onSnapshot(roomDocRef, (snap) => {
@@ -140,6 +139,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               lastMessageTime: d.lastMessageTime || prev.lastMessageTime,
               unreadCount: d.unreadCount ?? prev.unreadCount,
               participants: d.participants || prev.participants,
+              isTyping: d.isTyping ?? prev.isTyping,
+            };
+          });
+        }
+      });
+
+      const chatsRoomDocRef = doc(db, "chats_rooms", activeRoom.id);
+      unsubChatsRoom = onSnapshot(chatsRoomDocRef, (snap) => {
+        if (snap.exists()) {
+          const d = snap.data();
+          setFirestoreRoom((prev) => {
+            if (!prev) return activeRoom;
+            return {
+              ...prev,
+              lastMessage: d.lastMessage || prev.lastMessage,
+              lastMessageTime: d.lastMessageTime || prev.lastMessageTime,
+              unreadCount: d.unreadCount ?? prev.unreadCount,
+              participants: d.participants || prev.participants,
+              isTyping: d.isTyping ?? prev.isTyping,
             };
           });
         }
@@ -151,11 +169,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return () => {
       unsubMessages();
       unsubRoom();
+      unsubChatsRoom();
     };
   }, [activeRoom?.id]);
 
-  // Merge external messages prop with realtimeMessages to ensure no gap during transitions
-  const effectiveMessages = realtimeMessages.length > 0 ? realtimeMessages : messages;
+  // Real-time Firestore messages stream (with initial fallback if provided)
+  const effectiveMessages = realtimeMessages.length > 0 ? realtimeMessages : (messages || []);
   const effectiveRoom = firestoreRoom || activeRoom;
 
   // If no chat selected, display clean welcome neutral state!

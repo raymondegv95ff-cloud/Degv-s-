@@ -94,13 +94,24 @@ export function mapFirebaseUserToProfile(fbUser: FirebaseUser, extra: Partial<Us
 
 function getDeviceMetadata() {
   if (typeof window === "undefined") return {};
+
+  let deviceUniqueId = "";
+  try {
+    deviceUniqueId = localStorage.getItem("degvs_device_unique_id") || "";
+    if (!deviceUniqueId) {
+      deviceUniqueId = `dev_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      localStorage.setItem("degvs_device_unique_id", deviceUniqueId);
+    }
+  } catch {}
+
   return {
-    userAgent: navigator.userAgent || "Unknown",
-    platform: navigator.platform || "Web",
-    language: navigator.language || "es",
-    screenResolution: typeof window.screen !== "undefined" ? `${window.screen.width}x${window.screen.height}` : "desktop",
-    timezone: Intl?.DateTimeFormat?.()?.resolvedOptions?.()?.timeZone || "UTC",
-    isMobile: /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ""),
+    deviceId: deviceUniqueId,
+    userAgent: typeof navigator !== "undefined" ? navigator.userAgent || "Unknown" : "Unknown",
+    platform: typeof navigator !== "undefined" ? navigator.platform || "Web" : "Web",
+    language: typeof navigator !== "undefined" ? navigator.language || "es" : "es",
+    screenResolution: typeof window !== "undefined" && typeof window.screen !== "undefined" ? `${window.screen.width}x${window.screen.height}` : "desktop",
+    timezone: (typeof Intl !== "undefined" && Intl?.DateTimeFormat?.()?.resolvedOptions?.()?.timeZone) || "UTC",
+    isMobile: typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ""),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -386,17 +397,28 @@ export function useAuth() {
   useEffect(() => {
     let isMounted = true;
 
+    // Escuchar el estado de autenticación de Firebase con persistencia de sesión
     const unsubscribe = subscribeToFirebaseAuth(async (fbUser) => {
       if (!isMounted) return;
       if (fbUser) {
         setUser(fbUser);
-        await registerUser(fbUser);
-        setLoading(false);
+        try {
+          localStorage.setItem("degvs_user", JSON.stringify(fbUser));
+          // Registrar metadatos del dispositivo al detectar sesión
+          await registerUser(fbUser);
+        } catch (regErr) {
+          console.warn("[useAuth] registerUser notice:", regErr);
+        }
+        if (isMounted) setLoading(false);
       } else {
         try {
-          const anon = await initAnonymousUser();
+          const stored = localStorage.getItem("degvs_user");
+          const existingProfile = stored ? JSON.parse(stored) : undefined;
+          const anon = await initAnonymousUser(existingProfile);
           if (isMounted) {
             setUser(anon);
+            localStorage.setItem("degvs_user", JSON.stringify(anon));
+            await registerUser(anon);
             setLoading(false);
           }
         } catch (err: any) {
@@ -419,6 +441,8 @@ export function useAuth() {
     try {
       const guest = await loginGuestWithFirebase();
       setUser(guest);
+      localStorage.setItem("degvs_user", JSON.stringify(guest));
+      await registerUser(guest);
       return guest;
     } catch (err: any) {
       setError(err?.message);
@@ -433,6 +457,8 @@ export function useAuth() {
     try {
       const logged = await loginWithFirebase(emailOrUsername, pass);
       setUser(logged);
+      localStorage.setItem("degvs_user", JSON.stringify(logged));
+      await registerUser(logged);
       return logged;
     } catch (err: any) {
       setError(err?.message);
@@ -447,6 +473,8 @@ export function useAuth() {
     try {
       const registered = await registerWithFirebase(username, email, pass);
       setUser(registered);
+      localStorage.setItem("degvs_user", JSON.stringify(registered));
+      await registerUser(registered);
       return registered;
     } catch (err: any) {
       setError(err?.message);
@@ -459,6 +487,9 @@ export function useAuth() {
   const logout = async () => {
     await logoutFromFirebase();
     setUser(null);
+    try {
+      localStorage.removeItem("degvs_user");
+    } catch {}
   };
 
   return {
@@ -687,18 +718,19 @@ export async function sendMessage(
 
     // Update or create room in Firestore for persistent real-time rooms
     const roomRef = doc(db, "rooms", roomId);
-    await setDoc(
-      roomRef,
-      {
-        id: roomId,
-        lastMessage: text || (extraData.type === "image" ? "📷 Imagen" : extraData.type === "audio" ? "🎤 Nota de voz" : "Nuevo mensaje"),
-        lastMessageTime: messageData.createdAt,
-        timestamp: Date.now(),
-        updatedAt: serverTimestamp(),
-        participants: [senderId, receiverId],
-      },
-      { merge: true }
-    );
+    const chatsRoomRef = doc(db, "chats_rooms", roomId);
+    const roomPayload = {
+      id: roomId,
+      lastMessage: text || (extraData.type === "image" ? "📷 Imagen" : extraData.type === "audio" ? "🎤 Nota de voz" : "Nuevo mensaje"),
+      lastMessageTime: messageData.createdAt,
+      timestamp: Date.now(),
+      updatedAt: serverTimestamp(),
+      participants: [senderId, receiverId],
+    };
+    await Promise.allSettled([
+      setDoc(roomRef, roomPayload, { merge: true }),
+      setDoc(chatsRoomRef, roomPayload, { merge: true }),
+    ]);
 
     return docRef.id;
   } catch (error) {
@@ -718,8 +750,7 @@ export function listenForMessages(
   try {
     const q = query(
       collection(db, "messages"),
-      where("receiverId", "==", currentUserId),
-      orderBy("timestamp", "asc")
+      where("receiverId", "==", currentUserId)
     );
 
     return onSnapshot(
@@ -780,31 +811,33 @@ export function listenForRoomMessages(
   try {
     const q = query(
       collection(db, "messages"),
-      where("roomId", "==", roomId),
-      orderBy("timestamp", "asc")
+      where("roomId", "==", roomId)
     );
 
     return onSnapshot(
       q,
       (snapshot) => {
-        const msgs: Message[] = snapshot.docs.map((docSnap) => {
-          const data = docSnap.data();
-          return {
-            id: docSnap.id,
-            roomId: data.roomId || roomId,
-            senderId: data.senderId,
-            senderName: data.senderName || "Usuario",
-            senderAvatar: data.senderAvatar,
-            content: data.text || data.content || "",
-            type: data.type || "text",
-            mediaUrl: data.mediaUrl,
-            poll: data.poll,
-            createdAt: data.createdAt || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            timestamp: data.timestamp || Date.now(),
-            isRead: !!data.isRead,
-            reactions: data.reactions || [],
-          };
-        });
+        const msgs: Message[] = snapshot.docs
+          .map((docSnap) => {
+            const data = docSnap.data();
+            return {
+              id: docSnap.id,
+              roomId: data.roomId || roomId,
+              senderId: data.senderId,
+              senderName: data.senderName || "Usuario",
+              senderAvatar: data.senderAvatar,
+              content: data.text || data.content || "",
+              type: data.type || "text",
+              mediaUrl: data.mediaUrl,
+              poll: data.poll,
+              createdAt: data.createdAt || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              timestamp: data.timestamp || Date.now(),
+              isRead: !!data.isRead,
+              reactions: data.reactions || [],
+            };
+          })
+          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
         onMessagesUpdate(msgs);
       },
       (error) => {
