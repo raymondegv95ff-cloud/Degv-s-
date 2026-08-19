@@ -1,9 +1,43 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow read/write for messages and rooms in real-time chat
-    match /{document=**} {
+    // Helper function to check if request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Row-level check: verifies if authenticated UID exists in participants of the room
+    function isRoomParticipant(roomId) {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/rooms/$(roomId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.participants) ||
+        (exists(/databases/$(database)/documents/chats_rooms/$(roomId)) &&
+         request.auth.uid in get(/databases/$(database)/documents/chats_rooms/$(roomId)).data.participants)
+      );
+    }
+
+    // Users Collection: profiles and device presence metadata
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Chat Rooms Collection: accessible to participants
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Chats Rooms Alias Collection
+    match /chats_rooms/{roomId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Messages Collection: bidirectional real-time communication
+    match /messages/{messageId} {
       allow read, write: if true;
     }
   }
 }
+

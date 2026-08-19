@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import {
   initializeAppCheck,
@@ -88,6 +89,382 @@ export function mapFirebaseUserToProfile(fbUser: FirebaseUser, extra: Partial<Us
     bio: extra.bio || "¡Hola! Estoy usando Degv's Messenger 🚀",
     status: "online",
     phone: fbUser.phoneNumber || undefined,
+  };
+}
+
+function getDeviceMetadata() {
+  if (typeof window === "undefined") return {};
+  return {
+    userAgent: navigator.userAgent || "Unknown",
+    platform: navigator.platform || "Web",
+    language: navigator.language || "es",
+    screenResolution: typeof window.screen !== "undefined" ? `${window.screen.width}x${window.screen.height}` : "desktop",
+    timezone: Intl?.DateTimeFormat?.()?.resolvedOptions?.()?.timeZone || "UTC",
+    isMobile: /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ""),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Autenticación Anónima Automática y Persistente en Firebase Auth
+ */
+export async function initAnonymousUser(existingProfile?: Partial<UserProfile>): Promise<UserProfile> {
+  try {
+    let fbUser = auth.currentUser;
+    if (!fbUser) {
+      const userCredential = await signInAnonymously(auth);
+      fbUser = userCredential.user;
+    }
+
+    const username = existingProfile?.username || `user_${fbUser.uid.slice(0, 6)}`;
+    const profile: UserProfile = mapFirebaseUserToProfile(fbUser, {
+      username,
+      firstName: existingProfile?.firstName || username,
+      lastName: existingProfile?.lastName || "",
+      avatarUrl: existingProfile?.avatarUrl,
+      bio: existingProfile?.bio || "¡Hola! Estoy usando Degv's Messenger 🚀",
+      ...existingProfile,
+    });
+
+    await registerUser(profile);
+    return profile;
+  } catch (error) {
+    console.warn("[FirebaseAuth] Anonymous auth notice:", error);
+    // Safe fallback if network error
+    const fallbackId = auth.currentUser?.uid || `usr_anon_${Date.now()}`;
+    const fallbackProfile: UserProfile = {
+      id: fallbackId,
+      username: existingProfile?.username || `user_${fallbackId.slice(0, 6)}`,
+      firstName: existingProfile?.firstName || "Usuario",
+      lastName: existingProfile?.lastName || "",
+      avatarUrl: existingProfile?.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${fallbackId}`,
+      email: `${existingProfile?.username || fallbackId}@degvs.app`,
+      status: "online",
+    };
+    return fallbackProfile;
+  }
+}
+
+/**
+ * Guarda o actualiza la información básica del usuario en la colección 'users' de Firestore con metadatos del dispositivo
+ */
+export async function registerUser(user: UserProfile): Promise<void> {
+  try {
+    const userDocRef = doc(db, "users", user.id);
+    const device = getDeviceMetadata();
+
+    await setDoc(
+      userDocRef,
+      {
+        id: user.id,
+        username: user.username,
+        email: user.email || `${user.username}@degvs.app`,
+        firstName: user.firstName || user.username,
+        lastName: user.lastName || "",
+        avatarUrl: user.avatarUrl || null,
+        bio: user.bio || "En línea",
+        status: user.status || "online",
+        phone: user.phone || null,
+        device,
+        lastSeen: Date.now(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    console.error("[Firestore] Error in registerUser:", error);
+  }
+}
+
+/**
+ * Obtiene el perfil de un usuario registrado en Firestore por su ID o username
+ */
+export async function getFirestoreUser(userId: string): Promise<UserProfile | null> {
+  try {
+    const cleanId = (userId || "").trim();
+    if (!cleanId) return null;
+
+    // 1. Intento por Doc ID directo
+    const userDocRef = doc(db, "users", cleanId);
+    const snap = await getDoc(userDocRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      return {
+        id: snap.id,
+        username: data.username || snap.id,
+        firstName: data.firstName || data.username || "Usuario",
+        lastName: data.lastName || "",
+        email: data.email || `${data.username || snap.id}@degvs.app`,
+        avatarUrl: data.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.username || snap.id)}`,
+        bio: data.bio || "",
+        phone: data.phone || "",
+        status: data.status || "online",
+      };
+    }
+
+    // 2. Consulta 'where' en Firestore si pairId corresponde a un campo username o id
+    const usersRef = collection(db, "users");
+    const qUsername = query(usersRef, where("username", "==", cleanId));
+    let snapQuery = await getDocs(qUsername);
+    if (snapQuery.empty) {
+      const qId = query(usersRef, where("id", "==", cleanId));
+      snapQuery = await getDocs(qId);
+    }
+
+    if (!snapQuery.empty) {
+      const docData = snapQuery.docs[0].data();
+      return {
+        id: snapQuery.docs[0].id,
+        username: docData.username || snapQuery.docs[0].id,
+        firstName: docData.firstName || docData.username || "Usuario",
+        lastName: docData.lastName || "",
+        email: docData.email || `${docData.username || snapQuery.docs[0].id}@degvs.app`,
+        avatarUrl: docData.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(docData.username || snapQuery.docs[0].id)}`,
+        bio: docData.bio || "",
+        phone: docData.phone || "",
+        status: docData.status || "online",
+      };
+    }
+  } catch (err) {
+    console.warn("[Firestore] Error fetching user by ID or where query:", err);
+  }
+  return null;
+}
+
+/**
+ * Busca una sala existente entre dos usuarios mediante consulta 'participants' en Firestore o crea una nueva
+ */
+export async function findOrCreateDirectRoom(
+  currentUser: UserProfile,
+  targetUser: UserProfile
+): Promise<Room> {
+  const directRoomId = getDirectChatRoomId(currentUser.id, targetUser.id);
+  const targetName = `${targetUser.firstName || ""} ${targetUser.lastName || ""}`.trim() || targetUser.username;
+
+  try {
+    // 1. Verificar por ID determinista
+    const roomRef = doc(db, "rooms", directRoomId);
+    const snap = await getDoc(roomRef);
+
+    if (snap.exists()) {
+      const data = snap.data();
+      return {
+        id: directRoomId,
+        name: targetName,
+        avatarUrl: targetUser.avatarUrl || data.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(targetUser.username)}`,
+        unreadCount: data.unreadCount || 0,
+        lastMessage: data.lastMessage || "Chat conectado 🚀",
+        lastMessageTime: data.lastMessageTime || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        participants: [currentUser, targetUser],
+        isGroup: false,
+      };
+    }
+
+    // 2. Consulta 'where' por array de 'participants' en rooms y chats_rooms
+    const roomsRef = collection(db, "rooms");
+    const q = query(roomsRef, where("participants", "array-contains", currentUser.id));
+    const roomsSnap = await getDocs(q);
+
+    for (const roomDoc of roomsSnap.docs) {
+      const rData = roomDoc.data();
+      const parts = rData.participants || [];
+      if (parts.includes(targetUser.id)) {
+        return {
+          id: roomDoc.id,
+          name: targetName,
+          avatarUrl: targetUser.avatarUrl || rData.avatarUrl,
+          unreadCount: rData.unreadCount || 0,
+          lastMessage: rData.lastMessage || "Chat conectado 🚀",
+          lastMessageTime: rData.lastMessageTime || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          participants: [currentUser, targetUser],
+          isGroup: false,
+        };
+      }
+    }
+
+    // Consulta fallback en chats_rooms
+    const chatsRoomsRef = collection(db, "chats_rooms");
+    const qChats = query(chatsRoomsRef, where("participants", "array-contains", currentUser.id));
+    const chatsSnap = await getDocs(qChats);
+    for (const roomDoc of chatsSnap.docs) {
+      const rData = roomDoc.data();
+      const parts = rData.participants || [];
+      if (parts.includes(targetUser.id)) {
+        return {
+          id: roomDoc.id,
+          name: targetName,
+          avatarUrl: targetUser.avatarUrl || rData.avatarUrl,
+          unreadCount: rData.unreadCount || 0,
+          lastMessage: rData.lastMessage || "Chat conectado 🚀",
+          lastMessageTime: rData.lastMessageTime || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          participants: [currentUser, targetUser],
+          isGroup: false,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn("[Firestore] Notice checking direct room:", e);
+  }
+
+  // Create new room document in Firestore
+  const newRoom: Room = {
+    id: directRoomId,
+    name: targetName,
+    avatarUrl: targetUser.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(targetUser.username)}`,
+    unreadCount: 0,
+    lastMessage: "Chat en tiempo real conectado 🚀",
+    lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    participants: [currentUser, targetUser],
+    isGroup: false,
+  };
+
+  await saveRoomToFirestore(newRoom);
+  return newRoom;
+}
+
+/**
+ * Escucha en tiempo real todas las salas donde el usuario es participante
+ */
+export function listenForUserRooms(
+  userId: string,
+  onRoomsUpdate: (rooms: Room[]) => void
+): Unsubscribe {
+  try {
+    const roomsCollection = collection(db, "rooms");
+    const q = query(
+      roomsCollection,
+      where("participants", "array-contains", userId)
+    );
+
+    return onSnapshot(q, (snapshot) => {
+      const rooms: Room[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: docSnap.id,
+          name: d.name || "Chat",
+          avatarUrl: d.avatarUrl,
+          lastMessage: d.lastMessage || "",
+          lastMessageTime: d.lastMessageTime || "",
+          unreadCount: d.unreadCount || 0,
+          isGroup: !!d.isGroup,
+          isChannel: !!d.isChannel,
+          isVaultSecret: !!(d.isVaultSecret || d.isSecretVault),
+          participants: d.participants || [userId],
+          timestamp: d.timestamp || Date.now(),
+        };
+      });
+      onRoomsUpdate(rooms);
+    });
+  } catch (error) {
+    console.warn("[Firestore] Error in listenForUserRooms:", error);
+    return () => {};
+  }
+}
+
+/**
+ * Custom Hook: useAuth
+ * Maneja el estado de autenticación anónima/persistente y registro con metadatos
+ */
+export function useAuth() {
+  const [user, setUser] = useState<UserProfile | null>(() => {
+    try {
+      const stored = localStorage.getItem("degvs_user");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const unsubscribe = subscribeToFirebaseAuth(async (fbUser) => {
+      if (!isMounted) return;
+      if (fbUser) {
+        setUser(fbUser);
+        await registerUser(fbUser);
+        setLoading(false);
+      } else {
+        try {
+          const anon = await initAnonymousUser();
+          if (isMounted) {
+            setUser(anon);
+            setLoading(false);
+          }
+        } catch (err: any) {
+          if (isMounted) {
+            setError(err?.message || "Error al inicializar sesión");
+            setLoading(false);
+          }
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const loginGuest = async () => {
+    setLoading(true);
+    try {
+      const guest = await loginGuestWithFirebase();
+      setUser(guest);
+      return guest;
+    } catch (err: any) {
+      setError(err?.message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loginEmail = async (emailOrUsername: string, pass: string) => {
+    setLoading(true);
+    try {
+      const logged = await loginWithFirebase(emailOrUsername, pass);
+      setUser(logged);
+      return logged;
+    } catch (err: any) {
+      setError(err?.message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const registerEmail = async (username: string, email: string, pass: string) => {
+    setLoading(true);
+    try {
+      const registered = await registerWithFirebase(username, email, pass);
+      setUser(registered);
+      return registered;
+    } catch (err: any) {
+      setError(err?.message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    await logoutFromFirebase();
+    setUser(null);
+  };
+
+  return {
+    user,
+    setUser,
+    isAuthenticated: !!user,
+    loading,
+    error,
+    loginGuest,
+    loginEmail,
+    registerEmail,
+    logout,
   };
 }
 
@@ -455,22 +832,27 @@ export async function updateMessageReactionInFirestore(
 export async function saveRoomToFirestore(room: Room): Promise<void> {
   try {
     const roomRef = doc(db, "rooms", room.id);
-    await setDoc(
-      roomRef,
-      {
-        id: room.id,
-        name: room.name,
-        avatarUrl: room.avatarUrl || null,
-        lastMessage: room.lastMessage || null,
-        lastMessageTime: room.lastMessageTime || null,
-        unreadCount: room.unreadCount || 0,
-        isGroup: !!room.isGroup,
-        isChannel: !!room.isChannel,
-        isVaultSecret: !!(room.isVaultSecret || room.isSecretVault),
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const chatsRoomRef = doc(db, "chats_rooms", room.id);
+    const participantIds = Array.isArray(room.participants)
+      ? room.participants.map((p) => (typeof p === "string" ? p : p.id))
+      : [];
+
+    const roomPayload = {
+      id: room.id,
+      name: room.name,
+      avatarUrl: room.avatarUrl || null,
+      lastMessage: room.lastMessage || null,
+      lastMessageTime: room.lastMessageTime || null,
+      unreadCount: room.unreadCount || 0,
+      isGroup: !!room.isGroup,
+      isChannel: !!room.isChannel,
+      isVaultSecret: !!(room.isVaultSecret || room.isSecretVault),
+      participants: participantIds,
+      updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(roomRef, roomPayload, { merge: true });
+    await setDoc(chatsRoomRef, roomPayload, { merge: true });
   } catch (e) {
     console.warn("[Firestore] saveRoomToFirestore notice:", e);
   }

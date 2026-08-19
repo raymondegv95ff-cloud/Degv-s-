@@ -1,5 +1,24 @@
 {
   "entities": {
+    "users": {
+      "title": "Users",
+      "description": "User profiles and online presence",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "email": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "bio": { "type": "string" },
+        "status": { "type": "string" },
+        "phone": { "type": "string" },
+        "lastSeen": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "username"]
+    },
     "messages": {
       "title": "Messages",
       "description": "Real-time chat messages collection",
@@ -34,9 +53,10 @@
         "lastMessage": { "type": "string" },
         "lastMessageTime": { "type": "string" },
         "unreadCount": { "type": "number" },
+        "participants": { "type": "array" },
         "updatedAt": { "type": "number" }
       }
     }
   },
-  "firestoreRules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}"
+  "firestoreRules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    function isAuthenticated() {\n      return request.auth != null;\n    }\n    function isRoomParticipant(roomId) {\n      return isAuthenticated() && (\n        (exists(/databases/$(database)/documents/rooms/$(roomId)) &&\n         request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.participants) ||\n        (exists(/databases/$(database)/documents/chats_rooms/$(roomId)) &&\n         request.auth.uid in get(/databases/$(database)/documents/chats_rooms/$(roomId)).data.participants)\n      );\n    }\n    match /users/{userId} {\n      allow read, write: if true;\n    }\n    match /rooms/{roomId} {\n      allow read, write: if true;\n    }\n    match /chats_rooms/{roomId} {\n      allow read, write: if true;\n    }\n    match /messages/{messageId} {\n      allow read, write: if true;\n    }\n  }\n}"
 }

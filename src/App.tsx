@@ -13,6 +13,11 @@ import {
   subscribeToFirebaseAuth,
   listenForFirestoreUsers,
   getDirectChatRoomId,
+  initAnonymousUser,
+  registerUser,
+  getFirestoreUser,
+  findOrCreateDirectRoom,
+  listenForUserRooms,
 } from "./services/firebase";
 
 // Sidebar components
@@ -115,15 +120,30 @@ export const App: React.FC = () => {
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
 
-  // Firebase Auth State Listener
+  // Firebase Auth State & Anonymous Bootstrap Listener
   useEffect(() => {
     const unsubscribe = subscribeToFirebaseAuth((fbUser) => {
       if (fbUser) {
         setCurrentUser(fbUser);
         storageService.saveUser(fbUser);
+        registerUser(fbUser);
         setIsAuthModalOpen(false);
       }
     });
+
+    // Automatically ensure anonymous authentication on startup if not authenticated
+    const bootstrapAuth = async () => {
+      const stored = storageService.getUser();
+      if (!stored || stored.id.startsWith("usr_default") || stored.id.startsWith("user_1")) {
+        const anon = await initAnonymousUser(stored || undefined);
+        setCurrentUser(anon);
+        storageService.saveUser(anon);
+      } else {
+        registerUser(stored);
+      }
+    };
+    bootstrapAuth();
+
     return () => unsubscribe();
   }, []);
 
@@ -156,6 +176,40 @@ export const App: React.FC = () => {
     });
     return Array.from(map.values());
   }, [firestoreUsers, currentUser?.id]);
+
+  // Listen for user rooms in Firestore to sync latest lastMessage and rooms list
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const unsubscribe = listenForUserRooms(currentUser.id, (cloudRooms) => {
+      if (cloudRooms.length > 0) {
+        setRooms((prev) => {
+          const cloudMap = new Map<string, Room>();
+          cloudRooms.forEach((r) => cloudMap.set(r.id, r));
+
+          const merged = prev.map((localR) => {
+            const cloudR = cloudMap.get(localR.id);
+            if (cloudR) {
+              cloudMap.delete(localR.id);
+              return {
+                ...localR,
+                lastMessage: cloudR.lastMessage || localR.lastMessage,
+                lastMessageTime: cloudR.lastMessageTime || localR.lastMessageTime,
+                unreadCount: localR.id === activeChatId ? 0 : (cloudR.unreadCount ?? localR.unreadCount),
+                participants: cloudR.participants || localR.participants,
+              };
+            }
+            return localR;
+          });
+
+          const remainingCloud = Array.from(cloudMap.values());
+          const finalList = [...remainingCloud, ...merged];
+          storageService.saveRooms(finalList);
+          return finalList;
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, [currentUser?.id, activeChatId]);
 
   // Firestore Real-Time Message Listener for direct inbox
   useEffect(() => {
@@ -231,7 +285,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (typeof window === "undefined" || !currentUser) return;
 
-    const handleDeepLinkPairing = () => {
+    const handleDeepLinkPairing = async () => {
       const hash = window.location.hash ? window.location.hash.replace(/^#/, "") : "";
       const search = window.location.search ? window.location.search.replace(/^\?/, "") : "";
       const params = new URLSearchParams(hash || search);
@@ -242,36 +296,30 @@ export const App: React.FC = () => {
       const pairAvatar = params.get("avatar") || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(pairUsername)}`;
 
       if (pairId && pairId !== currentUser.id) {
-        const contactUser: UserProfile = {
-          id: pairId,
-          username: pairUsername,
-          firstName: pairName,
-          lastName: "",
-          email: `${pairUsername}@degvs.app`,
-          avatarUrl: pairAvatar,
-          status: "online",
-        };
-
-        storageService.saveContact(contactUser);
-        const directRoomId = getDirectChatRoomId(currentUser.id, pairId);
-
-        let directRoom = rooms.find((r) => r.id === directRoomId);
-        if (!directRoom) {
-          directRoom = {
-            id: directRoomId,
-            name: pairName,
+        // Query Firestore to verify or fetch the real user profile of pairId
+        let targetUser: UserProfile | null = await getFirestoreUser(pairId);
+        if (!targetUser) {
+          targetUser = {
+            id: pairId,
+            username: pairUsername,
+            firstName: pairName,
+            lastName: "",
+            email: `${pairUsername}@degvs.app`,
             avatarUrl: pairAvatar,
-            unreadCount: 0,
-            participants: [currentUser, contactUser],
-            lastMessage: "Chat en tiempo real conectado 🚀",
-            lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            status: "online",
           };
-          setRooms((prev) => [directRoom!, ...prev.filter((r) => r.id !== directRoomId)]);
-          storageService.saveRoom(directRoom);
-          saveRoomToFirestore(directRoom);
+          // Persist target user in Firestore users collection
+          await registerUser(targetUser);
         }
 
-        setActiveChatId(directRoomId);
+        storageService.saveContact(targetUser);
+
+        // Find or create shared room in Firestore with participants: [currentUser.id, pairId]
+        const directRoom = await findOrCreateDirectRoom(currentUser, targetUser);
+
+        setRooms((prev) => [directRoom, ...prev.filter((r) => r.id !== directRoom.id)]);
+        storageService.saveRoom(directRoom);
+        setActiveChatId(directRoom.id);
 
         // Clear hash to prevent repeated pairing triggers
         if (window.history && window.history.replaceState) {
@@ -283,23 +331,21 @@ export const App: React.FC = () => {
     handleDeepLinkPairing();
     window.addEventListener("hashchange", handleDeepLinkPairing);
     return () => window.removeEventListener("hashchange", handleDeepLinkPairing);
-  }, [currentUser, rooms]);
+  }, [currentUser]);
 
   // Firestore Real-Time Room Messages Listener
   useEffect(() => {
     if (!activeChatId) return;
     const unsubscribe = listenForRoomMessages(activeChatId, (cloudMsgs) => {
-      if (cloudMsgs.length > 0) {
-        setMessagesMap((prev) => {
-          const localMsgs = prev[activeChatId] || [];
-          const mergedMap = new Map<string, Message>();
-          localMsgs.forEach((m) => mergedMap.set(m.id, m));
-          cloudMsgs.forEach((m) => mergedMap.set(m.id, m));
-          const mergedList = Array.from(mergedMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-          storageService.saveRoomMessages(activeChatId, mergedList);
-          return { ...prev, [activeChatId]: mergedList };
-        });
-      }
+      setMessagesMap((prev) => {
+        const localMsgs = prev[activeChatId] || [];
+        const mergedMap = new Map<string, Message>();
+        localMsgs.forEach((m) => mergedMap.set(m.id, m));
+        cloudMsgs.forEach((m) => mergedMap.set(m.id, m));
+        const mergedList = Array.from(mergedMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        storageService.saveRoomMessages(activeChatId, mergedList);
+        return { ...prev, [activeChatId]: mergedList };
+      });
     });
     return () => unsubscribe();
   }, [activeChatId]);
@@ -752,18 +798,20 @@ export const App: React.FC = () => {
 
     // Update Room last message info
     const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const updatedLastMsg = type === "image" ? "📷 Imagen" : type === "sticker" ? "⭐ Sticker" : type === "audio" ? "🎵 Nota de voz" : content;
+
+    const updatedRoom: Room = {
+      ...activeRoom,
+      lastMessage: updatedLastMsg,
+      lastMessageTime: nowTime,
+      draftText: "",
+    };
+
     setRooms((prev) =>
-      prev.map((r) =>
-        r.id === activeChatId
-          ? {
-              ...r,
-              lastMessage: type === "image" ? "📷 Imagen" : type === "sticker" ? "⭐ Sticker" : type === "audio" ? "🎵 Nota de voz" : content,
-              lastMessageTime: nowTime,
-              draftText: "",
-            }
-          : r
-      )
+      prev.map((r) => (r.id === activeChatId ? updatedRoom : r))
     );
+    storageService.saveRoom(updatedRoom);
+    saveRoomToFirestore(updatedRoom);
 
     // Only handle AI response if the user is explicitly in the dedicated Degv's AI chat or typing /imagine
     if (isCurrentlyOnline && (activeRoom?.isAiChat || content.startsWith("/imagine"))) {

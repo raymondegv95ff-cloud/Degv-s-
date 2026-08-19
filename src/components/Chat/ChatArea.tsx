@@ -1,10 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Room, Message, BubbleStyle, UserProfile } from "../../types";
 import { ChatHeader } from "./ChatHeader";
 import { MessageList } from "./MessageList";
 import { ChatInputBar } from "./ChatInputBar";
 import { SmartSummaryDrawer } from "../Modals/SmartSummaryDrawer";
 import { Bot, MessageSquare, ShieldCheck, Sparkles, Plus, Smartphone, Lock, Minimize2 } from "lucide-react";
+import { listenForRoomMessages, db } from "../../services/firebase";
+import { doc, onSnapshot } from "firebase/firestore";
 
 interface ChatAreaProps {
   activeRoom: Room | null;
@@ -103,8 +105,61 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showInChatSearch, setShowInChatSearch] = useState(false);
   const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
 
+  // Direct onSnapshot Real-Time Listener for messages of active room
+  const [realtimeMessages, setRealtimeMessages] = useState<Message[]>(messages || []);
+  const [firestoreRoom, setFirestoreRoom] = useState<Room | null>(activeRoom);
+
+  useEffect(() => {
+    if (!activeRoom?.id) {
+      setRealtimeMessages([]);
+      setFirestoreRoom(null);
+      return;
+    }
+
+    setFirestoreRoom(activeRoom);
+
+    // 1. Listen for Firestore messages on activeRoom.id
+    const unsubMessages = listenForRoomMessages(activeRoom.id, (cloudMsgs) => {
+      if (cloudMsgs && cloudMsgs.length > 0) {
+        setRealtimeMessages(cloudMsgs);
+      }
+    });
+
+    // 2. Listen for Firestore room document updates (fetching latest lastMessage directly from DB)
+    let unsubRoom = () => {};
+    try {
+      const roomDocRef = doc(db, "rooms", activeRoom.id);
+      unsubRoom = onSnapshot(roomDocRef, (snap) => {
+        if (snap.exists()) {
+          const d = snap.data();
+          setFirestoreRoom((prev) => {
+            if (!prev) return activeRoom;
+            return {
+              ...prev,
+              lastMessage: d.lastMessage || prev.lastMessage,
+              lastMessageTime: d.lastMessageTime || prev.lastMessageTime,
+              unreadCount: d.unreadCount ?? prev.unreadCount,
+              participants: d.participants || prev.participants,
+            };
+          });
+        }
+      });
+    } catch (e) {
+      console.warn("[ChatArea] Notice attaching room onSnapshot:", e);
+    }
+
+    return () => {
+      unsubMessages();
+      unsubRoom();
+    };
+  }, [activeRoom?.id]);
+
+  // Merge external messages prop with realtimeMessages to ensure no gap during transitions
+  const effectiveMessages = realtimeMessages.length > 0 ? realtimeMessages : messages;
+  const effectiveRoom = firestoreRoom || activeRoom;
+
   // If no chat selected, display clean welcome neutral state!
-  if (!activeRoom) {
+  if (!effectiveRoom) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#050505] text-center select-none relative overflow-hidden">
         {/* Background Radial Grid Pattern */}
@@ -168,7 +223,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     );
   }
 
-  const wpStyles = getWallpaperStyles(activeRoom?.wallpaper);
+  const wpStyles = getWallpaperStyles(effectiveRoom.wallpaper);
 
   return (
     <div
@@ -176,14 +231,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       style={wpStyles.style}
     >
       {/* Chat Radial Grid Background Overlay if default */}
-      {(!activeRoom?.wallpaper || activeRoom.wallpaper === "default") && (
+      {(!effectiveRoom.wallpaper || effectiveRoom.wallpaper === "default") && (
         <div className="absolute inset-0 z-0 opacity-10 pointer-events-none">
           <div className="absolute inset-0 bg-[radial-gradient(#00E676_1px,transparent_1px)] [background-size:20px_20px]" />
         </div>
       )}
       {/* Header */}
       <ChatHeader
-        room={activeRoom}
+        room={effectiveRoom}
         onBackMobile={onBackMobile}
         onOpenContactDrawer={onOpenContactDrawer}
         onOpenSearchInChat={() => setShowInChatSearch(!showInChatSearch)}
@@ -195,7 +250,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         onDeleteChat={onDeleteChat}
         onOpenLockSetup={onOpenLockSetup}
         onOpenSmartSummary={() => setIsSummaryDrawerOpen(true)}
-        isTyping={activeRoom.isTyping}
+        isTyping={effectiveRoom.isTyping}
       />
 
       {/* In-Chat Search Bar Toggle */}
@@ -213,9 +268,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       {/* Messages Scroll Area */}
       <MessageList
-        messages={messages}
+        messages={effectiveMessages}
         currentUserId={currentUserId}
-        room={activeRoom}
+        room={effectiveRoom}
         bubbleStyle={bubbleStyle}
         searchQueryInChat={searchQueryInChat}
         onReply={onReplyMessage}
@@ -231,25 +286,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       {/* Bottom Input Controls */}
       <ChatInputBar
-        activeChatId={activeRoom.id}
+        activeChatId={effectiveRoom.id}
         onSendMessage={onSendMessage}
         onOpenPollCreator={onOpenPollCreator}
         replyToMessage={replyToMessage}
         onCancelReply={onCancelReply}
         onDraftChange={onDraftChange}
-        initialDraft={activeRoom.draftText}
+        initialDraft={effectiveRoom.draftText}
         smartReplySuggestions={smartReplySuggestions}
         onSelectSmartReply={onSelectSmartReply}
-        messages={messages}
-        chatName={activeRoom.name}
+        messages={effectiveMessages}
+        chatName={effectiveRoom.name}
       />
 
       {/* Smart Executive Summary Sliding Panel */}
       <SmartSummaryDrawer
         isOpen={isSummaryDrawerOpen}
         onClose={() => setIsSummaryDrawerOpen(false)}
-        room={activeRoom}
-        messages={messages}
+        room={effectiveRoom}
+        messages={effectiveMessages}
         onSendSummaryToChat={(summaryText) => onSendMessage(summaryText, "text")}
       />
     </div>
