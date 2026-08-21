@@ -106,20 +106,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
 
   // Direct onSnapshot Real-Time Listener for messages of active room
-  const [realtimeMessages, setRealtimeMessages] = useState<Message[]>([]);
+  const [realtimeMessages, setRealtimeMessages] = useState<Message[] | null>(null);
   const [firestoreRoom, setFirestoreRoom] = useState<Room | null>(activeRoom);
 
   useEffect(() => {
     if (!activeRoom?.id) {
-      setRealtimeMessages([]);
+      setRealtimeMessages(null);
       setFirestoreRoom(null);
       return;
     }
 
     setFirestoreRoom(activeRoom);
+    setRealtimeMessages(null);
+
+    console.log(`[ChatArea] 🔄 Iniciando suscripción onSnapshot para sala: ${activeRoom.id}`);
 
     // 1. Listen in real-time to messages for activeRoom.id directly from Firestore
     const unsubMessages = listenForRoomMessages(activeRoom.id, (cloudMsgs) => {
+      console.log(`[ChatArea] ⚡ onSnapshot actualizado en UI: ${cloudMsgs.length} mensajes en sala ${activeRoom.id}`);
       setRealtimeMessages(cloudMsgs || []);
     });
 
@@ -167,6 +171,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     return () => {
+      console.log(`[ChatArea] 🔌 Desconectando listeners onSnapshot para sala: ${activeRoom.id}`);
       unsubMessages();
       unsubRoom();
       unsubChatsRoom();
@@ -174,7 +179,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }, [activeRoom?.id]);
 
   // Real-time Firestore messages stream (with initial fallback if provided)
-  const effectiveMessages = realtimeMessages.length > 0 ? realtimeMessages : (messages || []);
+  const effectiveMessages = realtimeMessages !== null ? realtimeMessages : (messages || []);
   const effectiveRoom = firestoreRoom || activeRoom;
 
   // If no chat selected, display clean welcome neutral state!

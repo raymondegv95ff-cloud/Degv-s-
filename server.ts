@@ -1,7 +1,9 @@
 import express from "express";
+import http from "http";
 import path from "path";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
+import { WebSocketServer, WebSocket } from "ws";
 import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
@@ -83,6 +85,31 @@ app.post("/api/platform/sync", (req, res) => {
     actionExecuted: action || "sync",
     cacheOptimized: true,
   });
+});
+
+// Storage / Media Upload endpoint for Audios, Images, and Files
+app.post("/api/storage/upload", async (req, res) => {
+  try {
+    const { dataUrl, filename, mimeType, type } = req.body || {};
+    if (!dataUrl) {
+      return res.status(400).json({ error: "No dataUrl provided" });
+    }
+
+    console.log(`[Degv's Storage] Archivo recibido para almacenamiento: ${filename || "media"} (${mimeType || type})`);
+
+    // Return the universal web-accessible URL (portable Data URL or structured asset link)
+    res.json({
+      success: true,
+      url: dataUrl,
+      mediaUrl: dataUrl,
+      type: type || (mimeType?.startsWith("image/") ? "image" : mimeType?.startsWith("audio/") ? "audio" : "file"),
+      filename: filename || `file_${Date.now()}`,
+      uploadedAt: Date.now(),
+    });
+  } catch (error: any) {
+    console.error("[Degv's Storage] Error subiendo archivo:", error);
+    res.status(500).json({ error: error.message || "Error procesando archivo" });
+  }
 });
 
 // 2. Degv's AI Chat endpoint
@@ -780,6 +807,66 @@ app.get("/manifest.json", (req, res) => {
 
 // Setup Vite Development Middleware or Static Production Serving
 async function startServer() {
+  const server = http.createServer(app);
+
+  // Initialize Persistent WebSocket Server on path /ws
+  const wss = new WebSocketServer({ server, path: "/ws" });
+
+  wss.on("connection", (ws, req) => {
+    console.log(`[WebSocket Server] 🔌 Nueva conexión WebSocket activa desde ${req.socket.remoteAddress || "client"}`);
+
+    // Send welcome connection confirmation
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "connection_established",
+        timestamp: Date.now(),
+        status: "connected",
+        message: "Degv's Messenger WebSocket activo y enlazado.",
+      }));
+    }
+
+    // Keep connection continuously open with non-terminating heartbeats
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.ping();
+        } catch {}
+      }
+    }, 25000);
+
+    ws.on("message", (raw) => {
+      try {
+        const text = raw.toString();
+        const data = JSON.parse(text);
+
+        if (data.type === "ping") {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
+          }
+          return;
+        }
+
+        // Broadcast to other connected peers
+        wss.clients.forEach((client) => {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(text);
+          }
+        });
+      } catch {
+        // raw data
+      }
+    });
+
+    ws.on("close", (code, reason) => {
+      clearInterval(pingInterval);
+      console.log(`[WebSocket Server] 🔌 Conexión WebSocket cerrada (${code}: ${reason.toString() || "normal"})`);
+    });
+
+    ws.on("error", (err) => {
+      console.warn(`[WebSocket Server] ⚠️ Advertencia en socket:`, err.message);
+    });
+  });
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -794,8 +881,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Degv's Messenger Server running on http://0.0.0.0:${PORT}`);
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Degv's Messenger Server with WebSocket running on http://0.0.0.0:${PORT}`);
   });
 }
 

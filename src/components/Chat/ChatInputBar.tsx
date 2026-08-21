@@ -227,9 +227,15 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
   };
 
   // Handle Send Text or Image
+  // Real MediaRecorder Refs for Voice Notes
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
   const handleSend = () => {
     if (imagePreviewUrl) {
-      onSendMessage(inputText, "image", imagePreviewUrl);
+      console.log("[Degv's Chat] Enviando imagen adjunta a la sala:", activeChatId);
+      onSendMessage(inputText || "📷 Foto", "image", imagePreviewUrl);
       setImagePreviewUrl(null);
       setInputText("");
       onDraftChange("");
@@ -238,6 +244,7 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
 
     if (!inputText.trim()) return;
 
+    console.log("[Degv's Chat] Enviando mensaje de texto a la sala:", activeChatId, inputText);
     onSendMessage(inputText, "text");
     setInputText("");
     onDraftChange("");
@@ -252,22 +259,63 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
     }
   };
 
-  // Voice Note Recording Simulator
-  const startRecording = () => {
-    setIsRecordingVoice(true);
-    setRecordingSeconds(0);
-    setVoicePreviewUrl(null);
+  // Real Voice Note Recording via Web Audio / MediaRecorder API
+  const startRecording = async () => {
+    try {
+      console.log("[Degv's Chat] 🎙️ Iniciando grabación de nota de voz con MediaRecorder...");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
 
-    timerRef.current = setInterval(() => {
-      setRecordingSeconds((prev) => prev + 1);
-    }, 1000);
+      mediaStreamRef.current = stream;
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        console.log("[Degv's Chat] ⏹️ Grabación finalizada. Generando Data URL de audio...");
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          setVoicePreviewUrl(base64data);
+        };
+        reader.readAsDataURL(audioBlob);
+
+        // Liberar pistas del micrófono
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecordingVoice(true);
+      setRecordingSeconds(0);
+      setVoicePreviewUrl(null);
+
+      timerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("[Degv's Chat] Error al acceder al micrófono:", err);
+      setIsRecordingVoice(false);
+    }
   };
 
   const stopRecordingAndPreview = () => {
     clearInterval(timerRef.current);
     setIsRecordingVoice(false);
-    // Generated audio wave mock data url
-    setVoicePreviewUrl("mock_audio_data");
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
   };
 
   const cancelRecording = () => {
@@ -275,20 +323,31 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
     setIsRecordingVoice(false);
     setRecordingSeconds(0);
     setVoicePreviewUrl(null);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
   };
 
   const sendRecordedVoice = () => {
-    onSendMessage("Nota de voz", "audio");
+    if (voicePreviewUrl) {
+      console.log("[Degv's Chat] 📤 Enviando nota de voz real:", voicePreviewUrl.substring(0, 50) + "...");
+      onSendMessage("🎤 Nota de voz", "audio", voicePreviewUrl);
+    }
     cancelRecording();
   };
 
-  // Image Upload Simulation
+  // Real Image Upload & Processing
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      console.log(`[Degv's Storage] 🖼️ Procesando imagen: ${file.name} (${file.size} bytes)...`);
       const reader = new FileReader();
       reader.onload = (event) => {
-        setImagePreviewUrl(event.target?.result as string);
+        const result = event.target?.result as string;
+        setImagePreviewUrl(result);
         setShowAttachMenu(false);
       };
       reader.readAsDataURL(file);

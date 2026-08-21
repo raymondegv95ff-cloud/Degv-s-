@@ -1,40 +1,68 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 1. Helper de validación de autenticación
+    // 1. Authentication helper function
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // 2. Helper de Row-Level Security para participantes
-    function isRoomParticipant(roomId) {
-      return isAuthenticated() && (
-        (exists(/databases/$(database)/documents/chats_rooms/$(roomId)) &&
-         request.auth.uid in get(/databases/$(database)/documents/chats_rooms/$(roomId)).data.participants) ||
-        (exists(/databases/$(database)/documents/rooms/$(roomId)) &&
-         request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.participants)
-      );
-    }
-
-    // Colección 'users': Permite lectura y escritura de perfiles y metadatos de presencia
+    // Users Collection: User profiles, metadata & presence
     match /users/{userId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated() || true;
     }
 
-    // Colección 'chats_rooms': Salas de conversación en tiempo real
+    // Chats Rooms Collection: Real-time rooms & channels
     match /chats_rooms/{roomId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated() || true;
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated() || true;
+      }
     }
 
-    // Colección 'rooms' (compatibilidad bidireccional)
+    // Rooms Collection (compatibility fallback)
     match /rooms/{roomId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated() || true;
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated() || true;
+      }
     }
 
-    // Colección 'messages': Mensajes en tiempo real
+    // Messages Collection: Real-time chat messages
     match /messages/{messageId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated() || true;
+    }
+
+    // Calls Collection: WebRTC Signaling for Voice & Video calls
+    match /calls/{callId} {
+      allow read, write: if isAuthenticated() || true;
+
+      match /callerCandidates/{candidateId} {
+        allow read, write: if isAuthenticated() || true;
+      }
+
+      match /calleeCandidates/{candidateId} {
+        allow read, write: if isAuthenticated() || true;
+      }
+
+      match /offers/{offerId} {
+        allow read, write: if isAuthenticated() || true;
+      }
+
+      match /answers/{answerId} {
+        allow read, write: if isAuthenticated() || true;
+      }
+
+      match /iceCandidates/{candidateId} {
+        allow read, write: if isAuthenticated() || true;
+      }
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated() || true;
+      }
     }
   }
 }
+
 

@@ -4,6 +4,7 @@ import { storageService } from "./services/storageService";
 import { soundService } from "./services/soundService";
 import { notificationService } from "./services/notificationService";
 import { indexedDbQueueService } from "./services/indexedDbQueueService";
+import { websocketService } from "./services/websocketService";
 import {
   db,
   sendMessage as sendFirestoreMessage,
@@ -53,6 +54,7 @@ import { PollCreatorModal } from "./components/Modals/PollCreatorModal";
 import { WallpaperSelectorModal } from "./components/Modals/WallpaperSelectorModal";
 import { E2EEModal } from "./components/Modals/E2EEModal";
 import { CallModal } from "./components/Modals/CallModal";
+import { IncomingCallModal } from "./components/Modals/IncomingCallModal";
 import { AndroidGuideModal } from "./components/Modals/AndroidGuideModal";
 import { PublishDeployModal } from "./components/Modals/PublishDeployModal";
 import { GitHubActionsModal } from "./components/Modals/GitHubActionsModal";
@@ -68,6 +70,7 @@ import { PlatformUpdateModal } from "./components/Modals/PlatformUpdateModal";
 import { SmartReplyService } from "./services/smartReplyService";
 import { platformUpdateService } from "./services/platformUpdateService";
 import { CrossPlatformUpdateState } from "./types";
+import { useWebRTC } from "./hooks/useWebRTC";
 
 
 export const App: React.FC = () => {
@@ -124,6 +127,25 @@ export const App: React.FC = () => {
   // Group & Channel Creation State
   const [isCreateGroupChannelOpen, setIsCreateGroupChannelOpen] = useState(false);
   const [createGroupChannelMode, setCreateGroupChannelMode] = useState<"group" | "channel">("group");
+
+  // Real-Time WebRTC Calling Hook (Google STUN + Firestore Signaling)
+  const {
+    activeCall,
+    incomingCall,
+    isCalling,
+    isConnected: isWebRtcConnected,
+    localStream: webRtcLocalStream,
+    remoteStream: webRtcRemoteStream,
+    isMuted: isWebRtcMuted,
+    isVideoOn: isWebRtcVideoOn,
+    callDuration: webRtcCallDuration,
+    startCall: startWebRtcCall,
+    answerCall: answerWebRtcCall,
+    declineCall: declineWebRtcCall,
+    endCall: endWebRtcCall,
+    toggleMute: toggleWebRtcMute,
+    toggleVideo: toggleWebRtcVideo,
+  } = useWebRTC(currentUser);
 
   // Offline Connection Loss Detection & IndexedDB Queue State
   const [isOnline, setIsOnline] = useState<boolean>(() => indexedDbQueueService.isOnline());
@@ -479,12 +501,14 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!activeChatId) return;
     const unsubscribe = listenForRoomMessages(activeChatId, (cloudMsgs) => {
+      console.log(`[App Chat] 📥 [listenForRoomMessages Callback in App.tsx] Received ${cloudMsgs.length} messages for room '${activeChatId}':`, cloudMsgs);
       setMessagesMap((prev) => {
         const localMsgs = prev[activeChatId] || [];
         const mergedMap = new Map<string, Message>();
         localMsgs.forEach((m) => mergedMap.set(m.id, m));
         cloudMsgs.forEach((m) => mergedMap.set(m.id, m));
         const mergedList = Array.from(mergedMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        console.log(`[App Chat] 🔄 [Merged State Updated] Room '${activeChatId}' now has ${mergedList.length} total messages in React state.`);
         storageService.saveRoomMessages(activeChatId, mergedList);
         return { ...prev, [activeChatId]: mergedList };
       });
@@ -493,6 +517,7 @@ export const App: React.FC = () => {
   }, [activeChatId]);
 
   useEffect(() => {
+    websocketService.init();
     platformUpdateService.init();
     const unsubscribe = platformUpdateService.subscribe((st) => {
       setPlatformUpdateState(st);
@@ -620,19 +645,43 @@ export const App: React.FC = () => {
   const [activeCallPeer, setActiveCallPeer] = useState<{ id: string; name: string; avatarUrl?: string } | null>(null);
 
   // Trigger call and save call log
-  const handleStartCall = (peerId: string, isVideo: boolean, peerName?: string) => {
-    const targetRoom = rooms.find((r) => r.id === peerId || r.participants?.some((p) => p.id === peerId));
+  const handleStartCall = async (peerId: string, isVideo: boolean, peerName?: string) => {
+    const targetRoom = rooms.find(
+      (r) =>
+        r.id === peerId ||
+        r.participants?.some((p) => (typeof p === "string" ? p === peerId : p?.id === peerId))
+    );
     const finalName = peerName || targetRoom?.name || activeRoom?.name || "Contacto";
     const finalAvatar = targetRoom?.avatarUrl || activeRoom?.avatarUrl;
 
-    setActiveCallPeer({ id: peerId, name: finalName, avatarUrl: finalAvatar });
+    // Buscar perfil de usuario del destinatario
+    let targetUser: UserProfile | undefined = targetRoom?.participants?.find((p) =>
+      typeof p === "string" ? p !== currentUser?.id : p?.id !== currentUser?.id
+    ) as UserProfile | undefined;
+
+    if (!targetUser) {
+      targetUser = firestoreUsers.find((u) => u.id === peerId) || {
+        id: peerId,
+        username: finalName.toLowerCase().replace(/\s+/g, "_"),
+        firstName: finalName,
+        lastName: "",
+        avatarUrl: finalAvatar,
+        email: `${peerId}@degvs.app`,
+        status: "online",
+      };
+    }
+
+    setActiveCallPeer({ id: targetUser.id, name: finalName, avatarUrl: finalAvatar });
     setCallIsVideo(isVideo);
     setIsCallOpen(true);
+
+    console.log("[Degv's WebRTC] 📞 Emitiendo llamada WebRTC hacia:", targetUser);
+    await startWebRtcCall(targetUser, isVideo, activeRoom?.id || peerId);
 
     // Save call log in storage
     storageService.saveCallLog({
       id: `call_${Date.now()}`,
-      peerId,
+      peerId: targetUser.id,
       peerName: finalName,
       peerAvatar: finalAvatar,
       type: isVideo ? "video" : "voice",
@@ -894,6 +943,17 @@ export const App: React.FC = () => {
         : undefined,
     };
 
+    console.log(`[App Chat] 📝 [handleSendMessage: Local State Created]`, {
+      messageId: newMsg.id,
+      roomId: activeChatId,
+      senderId: currentUser.id,
+      senderName: newMsg.senderName,
+      type: newMsg.type,
+      hasMedia: !!mediaUrl,
+      isOnline: isCurrentlyOnline,
+      hasReplySnippet: !!newMsg.replyToSnippet,
+    });
+
     // If online, dispatch message to Firebase Firestore in real-time
     if (isCurrentlyOnline && activeRoom) {
       let targetReceiverId = "usr_all";
@@ -912,6 +972,15 @@ export const App: React.FC = () => {
         if (found) targetReceiverId = found;
       }
 
+      console.log(`[App Chat] 🌐 [handleSendMessage: Dispatching to Firestore]`, {
+        roomId: activeChatId,
+        senderId: currentUser.id,
+        targetReceiverId,
+        type: newMsg.type,
+        snippet: content ? content.substring(0, 40) : "",
+      });
+      console.log(`[App Chat] 📦 [handleSendMessage: Full Outgoing Message Payload]:`, JSON.stringify(newMsg, null, 2));
+
       sendFirestoreMessage(currentUser.id, targetReceiverId, content, {
         id: newMsg.id,
         roomId: activeChatId,
@@ -920,9 +989,18 @@ export const App: React.FC = () => {
         type: newMsg.type,
         mediaUrl: newMsg.mediaUrl,
         poll: newMsg.poll,
-      }).catch((err) => {
-        console.warn("Firestore send warning:", err);
-      });
+      })
+        .then((docId) => {
+          console.log(`[App Chat] ✅ [handleSendMessage: Document Created in Firestore] docId: ${docId}, messageId: ${newMsg.id}`);
+        })
+        .catch((err) => {
+          console.error(`[App Chat] ❌ [handleSendMessage: Network/Permissions Error] Fallo al entregar mensaje a Firestore:`, {
+            error: err.message || err,
+            code: err.code,
+            roomId: activeChatId,
+            senderId: currentUser.id,
+          });
+        });
     }
 
     // If offline, save in IndexedDB queue
@@ -1335,7 +1413,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen h-[100dvh] w-screen w-[100dvw] max-h-[100dvh] max-w-[100dvw] fixed inset-0 overflow-hidden bg-[#050505] text-slate-100 font-sans antialiased selection:bg-[#00E676] selection:text-slate-950">
+    <div className="flex h-full h-[100dvh] w-full fixed inset-0 overflow-hidden bg-[#050505] text-slate-100 font-sans antialiased selection:bg-[#00E676] selection:text-slate-950">
       {/* LEFT SIDEBAR COLUMN (Hidden on Mobile when chat active) */}
       <div
         className={`w-full md:w-80 lg:w-[320px] flex flex-col h-full bg-[#0a0a0a]/80 backdrop-blur-xl border-r border-white/5 z-10 shrink-0 transition-all ${
@@ -1920,15 +1998,43 @@ export const App: React.FC = () => {
         roomName={activeRoom?.name || "Contacto"}
       />
 
+      {/* WebRTC Incoming Call Notification Modal */}
+      <IncomingCallModal
+        call={incomingCall}
+        onAccept={answerWebRtcCall}
+        onDecline={declineWebRtcCall}
+      />
+
+      {/* WebRTC Active Call & Video Modal */}
       <CallModal
-        isOpen={isCallOpen}
+        isOpen={isCallOpen || !!activeCall || isCalling}
         onClose={() => {
           setIsCallOpen(false);
           setActiveCallPeer(null);
+          endWebRtcCall();
         }}
-        contactName={activeCallPeer?.name || activeRoom?.name || "Contacto"}
-        avatarUrl={activeCallPeer?.avatarUrl || activeRoom?.avatarUrl}
-        isVideo={callIsVideo}
+        contactName={
+          activeCall?.calleeName ||
+          activeCall?.callerName ||
+          activeCallPeer?.name ||
+          activeRoom?.name ||
+          "Contacto"
+        }
+        avatarUrl={
+          activeCall?.calleeAvatar ||
+          activeCall?.callerAvatar ||
+          activeCallPeer?.avatarUrl ||
+          activeRoom?.avatarUrl
+        }
+        isVideo={callIsVideo || isWebRtcVideoOn || activeCall?.type === "video"}
+        localStream={webRtcLocalStream}
+        remoteStream={webRtcRemoteStream}
+        isConnected={isWebRtcConnected}
+        isMuted={isWebRtcMuted}
+        isVideoOn={isWebRtcVideoOn}
+        callDuration={webRtcCallDuration}
+        onToggleMute={toggleWebRtcMute}
+        onToggleVideo={toggleWebRtcVideo}
       />
 
       <AndroidGuideModal

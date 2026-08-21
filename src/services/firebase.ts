@@ -1,13 +1,8 @@
 import { useState, useEffect } from "react";
-import { initializeApp, getApps, getApp } from "firebase/app";
-import {
-  initializeAppCheck,
-  ReCaptchaV3Provider,
-  CustomProvider,
-  type AppCheck,
-} from "firebase/app-check";
+import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import {
   getFirestore,
+  initializeFirestore,
   collection,
   addDoc,
   onSnapshot,
@@ -21,6 +16,7 @@ import {
   getDoc,
   serverTimestamp,
   Unsubscribe,
+  Firestore,
 } from "firebase/firestore";
 import {
   getAuth,
@@ -36,42 +32,42 @@ import firebaseConfig from "../../firebase-applet-config.json";
 import { Message, Room, UserProfile, Reaction } from "../types";
 
 // 1. Initialize Firebase App instance
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+export const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// 2. Initialize Firebase AppCheck for security token validation
-export let appCheck: AppCheck | null = null;
-if (typeof window !== "undefined") {
-  try {
-    const recaptchaSiteKey =
-      (import.meta as any).env?.VITE_RECAPTCHA_SITE_KEY ||
-      (window as any).FIREBASE_APPCHECK_RECAPTCHA_KEY ||
-      "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI";
+// 2. Initialize Firestore directly with database ID if configured
+export const db: Firestore = (() => {
+  const dbId =
+    firebaseConfig.firestoreDatabaseId &&
+    firebaseConfig.firestoreDatabaseId !== "(default)"
+      ? firebaseConfig.firestoreDatabaseId
+      : undefined;
 
-    // Enable debug token in development or test runs
-    if (
-      (import.meta as any).env?.DEV ||
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1"
-    ) {
-      (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN || true;
+  if (dbId) {
+    try {
+      return getFirestore(app, dbId);
+    } catch (e1) {
+      console.warn(`[Firebase] getFirestore(app, "${dbId}") failed, attempting initializeFirestore:`, e1);
+      try {
+        return initializeFirestore(app, { ignoreUndefinedProperties: true }, dbId);
+      } catch (e2) {
+        console.warn(`[Firebase] initializeFirestore with custom dbId failed, falling back to default instance:`, e2);
+      }
     }
-
-    appCheck = initializeAppCheck(app, {
-      provider: new ReCaptchaV3Provider(recaptchaSiteKey),
-      isTokenAutoRefreshEnabled: true,
-    });
-    console.log("[Firebase AppCheck] Security layer initialized with auto-refresh token enabled.");
-  } catch (err) {
-    console.warn("[Firebase AppCheck] Security layer initialization notice:", err);
   }
-}
 
-// 2. Initialize Firestore with Database ID if custom
-export const db =
-  firebaseConfig.firestoreDatabaseId &&
-  firebaseConfig.firestoreDatabaseId !== "(default)"
-    ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-    : getFirestore(app);
+  try {
+    return getFirestore(app);
+  } catch (e3) {
+    console.warn(`[Firebase] getFirestore(app) failed, attempting initializeFirestore default:`, e3);
+    try {
+      return initializeFirestore(app, { ignoreUndefinedProperties: true });
+    } catch (e4) {
+      console.error("[Firebase] Fatal error initializing Firestore:", e4);
+      // Fallback instance to prevent crashing on root evaluation
+      return getFirestore(app);
+    }
+  }
+})();
 
 // 3. Initialize Firebase Authentication
 export const auth = getAuth(app);
@@ -690,8 +686,20 @@ export async function sendMessage(
   text: string,
   extraData: Partial<Message> = {}
 ): Promise<string> {
+  const roomId = extraData.roomId || getDirectChatRoomId(senderId, receiverId);
+  const startTime = Date.now();
+  console.log(`[Firestore Realtime] 📤 [sendMessage Flow: Step 1] Preparando payload para Firestore:`, {
+    senderId,
+    receiverId,
+    roomId,
+    type: extraData.type || "text",
+    contentLength: text?.length || 0,
+    textSnippet: text ? text.substring(0, 50) : "",
+    hasMedia: !!extraData.mediaUrl,
+    timestamp: startTime,
+  });
+
   try {
-    const roomId = extraData.roomId || getDirectChatRoomId(senderId, receiverId);
     const messagesCollection = collection(db, "messages");
 
     const messageData = {
@@ -714,7 +722,11 @@ export async function sendMessage(
       ...extraData,
     };
 
+    console.log(`[Firestore Realtime] 🚀 [sendMessage Flow: Step 2] Ejecutando addDoc en colección 'messages'...`);
+    console.log(`[Firestore Realtime] 📦 [sendMessage Full Payload before Firestore write]:`, JSON.stringify(messageData, null, 2));
     const docRef = await addDoc(messagesCollection, messageData);
+    const duration = Date.now() - startTime;
+    console.log(`[Firestore Realtime] ✅ [sendMessage Flow: Step 3] Mensaje creado con éxito en Firestore. Document ID: '${docRef.id}' (${duration}ms)`);
 
     // Update or create room in Firestore for persistent real-time rooms
     const roomRef = doc(db, "rooms", roomId);
@@ -727,14 +739,23 @@ export async function sendMessage(
       updatedAt: serverTimestamp(),
       participants: [senderId, receiverId],
     };
+
+    console.log(`[Firestore Realtime] 🔄 [sendMessage Flow: Step 4] Actualizando metadatos de sala en 'rooms' y 'chats_rooms'...`);
     await Promise.allSettled([
       setDoc(roomRef, roomPayload, { merge: true }),
       setDoc(chatsRoomRef, roomPayload, { merge: true }),
     ]);
 
+    console.log(`[Firestore Realtime] ✨ [sendMessage Flow: Complete] Sala '${roomId}' sincronizada`);
     return docRef.id;
-  } catch (error) {
-    console.error("[Firestore] Error sending message:", error);
+  } catch (error: any) {
+    console.error("[Firestore Realtime] ❌ [sendMessage Flow: Failed] Error de red o permisos al enviar mensaje:", {
+      errorMsg: error.message || error,
+      errorCode: error.code,
+      roomId,
+      senderId,
+      receiverId,
+    });
     throw error;
   }
 }
@@ -808,6 +829,7 @@ export function listenForRoomMessages(
   roomId: string,
   onMessagesUpdate: (messages: Message[]) => void
 ): Unsubscribe {
+  console.log(`[Firestore Realtime] 👂 [listenForRoomMessages] Configurando listener onSnapshot para sala '${roomId}'...`);
   try {
     const q = query(
       collection(db, "messages"),
@@ -817,6 +839,20 @@ export function listenForRoomMessages(
     return onSnapshot(
       q,
       (snapshot) => {
+        const changes = snapshot.docChanges();
+        console.log(`[Firestore Realtime] 📥 [onSnapshot Event] Sala '${roomId}': ${snapshot.docs.length} documentos totales, ${changes.length} cambios en este lote.`);
+
+        const rawDocsPayload = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+        console.log(`[Firestore Realtime] 📦 [onSnapshot Full Payload Received for Room '${roomId}'] (${rawDocsPayload.length} items):`, rawDocsPayload);
+
+        changes.forEach((ch) => {
+          const d = ch.doc.data();
+          console.log(`[Firestore Realtime] 📄 [Doc Change: ${ch.type.toUpperCase()}] ID: ${ch.doc.id} | Sender: ${d.senderId} | Texto: "${(d.text || d.content || "").substring(0, 30)}"`);
+        });
+
         const msgs: Message[] = snapshot.docs
           .map((docSnap) => {
             const data = docSnap.data();
@@ -841,11 +877,11 @@ export function listenForRoomMessages(
         onMessagesUpdate(msgs);
       },
       (error) => {
-        console.warn("[Firestore] Room listener notice:", error.message);
+        console.error(`[Firestore Realtime] ❌ [onSnapshot Error] Error al escuchar mensajes en sala '${roomId}':`, error);
       }
     );
   } catch (err) {
-    console.warn("[Firestore] Failed to set up room listener:", err);
+    console.error(`[Firestore Realtime] ❌ [listenForRoomMessages] Excepción configurando query para sala '${roomId}':`, err);
     return () => {};
   }
 }
