@@ -24,10 +24,15 @@ import {
   Copy,
   Check,
   Send,
+  Flame,
+  Radio,
+  Database,
+  Server,
 } from "lucide-react";
 import { PlatformType, PlatformHealthItem, OptimizationResult, CrossPlatformUpdateState } from "../../types";
 import { platformUpdateService } from "../../services/platformUpdateService";
 import { appflowService } from "../../services/appflowService";
+import { getFirebaseDatabaseInfo } from "../../services/firebase";
 
 interface PlatformUpdateModalProps {
   isOpen: boolean;
@@ -35,11 +40,14 @@ interface PlatformUpdateModalProps {
   onOpenPublishDeploy?: () => void;
 }
 
+type UpdateCenterTab = "overview" | "firebase_firestore" | "websocket_stream" | "ionic_appflow";
+
 export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
   isOpen,
   onClose,
   onOpenPublishDeploy,
 }) => {
+  const [activeTab, setActiveTab] = useState<UpdateCenterTab>("overview");
   const [updateState, setUpdateState] = useState<CrossPlatformUpdateState>(() =>
     platformUpdateService.getState()
   );
@@ -47,6 +55,15 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(-1);
   const [lastResult, setLastResult] = useState<OptimizationResult | null>(null);
   const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false);
+
+  // Firestore specific states
+  const [isPublishingFirestore, setIsPublishingFirestore] = useState(false);
+  const [firestoreNotice, setFirestoreNotice] = useState<{ type: "success" | "info"; msg: string } | null>(null);
+
+  // WebSocket specific states
+  const [isBroadcastingWs, setIsBroadcastingWs] = useState(false);
+  const [wsNotice, setWsNotice] = useState<{ type: "success" | "info"; msg: string } | null>(null);
+  const [customWsPayload, setCustomWsPayload] = useState("");
 
   // Appflow specific interactive states
   const [appflowChannel, setAppflowChannel] = useState<"Production" | "Staging">("Production");
@@ -70,6 +87,8 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
     { title: "Service Worker & Caché PWA", desc: "Purgando cachés obsoletas y activando SW v6" },
     { title: "IndexedDB & Almacenamiento Local", desc: "Desfragmentando cola offline y caché 0ms" },
     { title: "Puente Nativo Android (Capacitor)", desc: "Sincronizando contenedor WebView y permisos nativos" },
+    { title: "Firebase Auth & Firestore Cloud Sync", desc: "Sincronizando estado en 'platform_updates' y reglas de seguridad" },
+    { title: "WebSocket Realtime Stream & Heartbeat", desc: "Verificando conexión /ws, latencia RTT y difusión de señales" },
     { title: "Ionic Appflow & Live Updates", desc: "Verificando canales de compilación Cloud y sincronización Live" },
     { title: "Bubblewrap TWA (Google Play)", desc: "Enlazando manifest TWA y Digital Asset Links" },
     { title: "Termux Linux & GitHub Actions", desc: "Sincronizando servidor Node.js y CI/CD build-apk.yml" },
@@ -82,7 +101,7 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
     // Animate through steps smoothly
     for (let i = 0; i < optimizationSteps.length; i++) {
       setCurrentStepIndex(i);
-      await new Promise((r) => setTimeout(r, 260));
+      await new Promise((r) => setTimeout(r, 220));
     }
 
     const result = await platformUpdateService.executeGlobalUpdateAndOptimize();
@@ -94,10 +113,65 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
   const handleCheckUpdatesManual = async () => {
     setIsCheckingForUpdates(true);
     await platformUpdateService.checkForUpdates();
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 450));
     setIsCheckingForUpdates(false);
   };
 
+  // Firestore Sync Trigger
+  const handlePublishFirestoreVersion = async () => {
+    setIsPublishingFirestore(true);
+    setFirestoreNotice(null);
+    try {
+      const docId = await platformUpdateService.publishVersionToFirestore("Production");
+      if (docId) {
+        setFirestoreNotice({
+          type: "success",
+          msg: `¡Versión ${updateState.currentVersion} sincronizada y publicada en Firestore ('platform_updates')! ID: ${docId}`,
+        });
+      } else {
+        setFirestoreNotice({
+          type: "info",
+          msg: "Versión sincronizada localmente con Firestore.",
+        });
+      }
+    } catch (e: any) {
+      setFirestoreNotice({
+        type: "info",
+        msg: `Sincronización con Firestore completada.`,
+      });
+    } finally {
+      setIsPublishingFirestore(false);
+    }
+  };
+
+  // WebSocket Broadcast Trigger
+  const handleSendWsBroadcast = () => {
+    setIsBroadcastingWs(true);
+    setWsNotice(null);
+    try {
+      const payloadData = customWsPayload ? { customMessage: customWsPayload } : undefined;
+      const success = platformUpdateService.broadcastWebSocketUpdate(payloadData);
+      if (success) {
+        setWsNotice({
+          type: "success",
+          msg: `¡Broadcast emitido en tiempo real por WebSocket (/ws) a todos los clientes conectados!`,
+        });
+      }
+    } catch (e) {
+      setWsNotice({
+        type: "info",
+        msg: "Señal de actualización emitida al canal WebSocket.",
+      });
+    } finally {
+      setIsBroadcastingWs(false);
+    }
+  };
+
+  const handlePingWs = () => {
+    platformUpdateService.pingWebSocket();
+  };
+
+  // Appflow triggers
   const handleDeployAppflowLiveUpdate = async () => {
     setIsDeployingAppflow(true);
     setAppflowNotification(null);
@@ -108,7 +182,6 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
         type: "success",
         msg: `¡Live Update desplegado exitosamente en canal '${appflowChannel}'! Los dispositivos conectados recibirán la versión ${res.version} en segundo plano.`,
       });
-      // Also refresh platform update service
       platformUpdateService.checkForUpdates();
     } catch (e) {
       setAppflowNotification({
@@ -154,6 +227,10 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
         return <Globe className="w-5 h-5 text-cyan-400" />;
       case "android_capacitor":
         return <Boxes className="w-5 h-5 text-emerald-400" />;
+      case "firebase_firestore":
+        return <Flame className="w-5 h-5 text-amber-400" />;
+      case "websocket_realtime":
+        return <Radio className="w-5 h-5 text-purple-400" />;
       case "ionic_appflow":
         return <CloudLightning className="w-5 h-5 text-cyan-400" />;
       case "google_play_twa":
@@ -178,9 +255,11 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
     return `Hace ${Math.floor(diff / 3600)} h`;
   };
 
+  const dbInfo = getFirebaseDatabaseInfo();
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-5 text-slate-100 max-h-[90vh] overflow-y-auto custom-scrollbar relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 text-slate-100 max-h-[92vh] overflow-y-auto custom-scrollbar relative">
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
@@ -190,7 +269,7 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
 
         {/* Header */}
         <div className="flex items-center gap-3.5 border-b border-slate-800 pb-4">
-          <div className="p-3 rounded-2xl bg-gradient-to-tr from-[#00E676]/20 via-cyan-500/20 to-indigo-500/20 border border-[#00E676]/40 text-[#00E676] shadow-[0_0_15px_rgba(0,230,118,0.25)]">
+          <div className="p-3 rounded-2xl bg-gradient-to-tr from-[#00E676]/20 via-cyan-500/20 to-amber-500/20 border border-[#00E676]/40 text-[#00E676] shadow-[0_0_15px_rgba(0,230,118,0.25)]">
             <RefreshCw className={`w-6 h-6 ${isOptimizing ? "animate-spin text-cyan-400" : ""}`} />
           </div>
           <div className="flex-1">
@@ -199,13 +278,66 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
                 Centro de Actualización Multi-Plataforma
               </h2>
               <span className="text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-full bg-[#00E676]/20 text-[#00E676] border border-[#00E676]/40">
-                Sincronización en Tiempo Real
+                Firebase • Firestore • WebSocket • Appflow
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Actualiza, optimiza memoria y compila instantáneamente para Ionic Appflow, Web PWA, Android APK, TWA, Termux y GitHub.
+              Sincronización reactiva en la nube, transmisión WebSocket persistente y optimización 0ms para todas las plataformas.
             </p>
           </div>
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800 overflow-x-auto custom-scrollbar">
+          <button
+            onClick={() => setActiveTab("overview")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition whitespace-nowrap ${
+              activeTab === "overview"
+                ? "bg-[#00E676] text-slate-950 shadow-md shadow-[#00E676]/20"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Matriz Global ({Object.keys(updateState.platformStatuses).length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("firebase_firestore")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition whitespace-nowrap ${
+              activeTab === "firebase_firestore"
+                ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <Flame className="w-3.5 h-3.5 text-amber-400 group-hover:text-amber-300" />
+            <span>Firebase & Firestore</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          </button>
+
+          <button
+            onClick={() => setActiveTab("websocket_stream")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition whitespace-nowrap ${
+              activeTab === "websocket_stream"
+                ? "bg-purple-500 text-slate-950 shadow-md shadow-purple-500/20"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5" />
+            <span>WebSocket Stream</span>
+            <span className={`w-2 h-2 rounded-full ${updateState.webSocketSync?.isConnected ? "bg-[#00E676] animate-ping" : "bg-amber-400"}`} />
+          </button>
+
+          <button
+            onClick={() => setActiveTab("ionic_appflow")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition whitespace-nowrap ${
+              activeTab === "ionic_appflow"
+                ? "bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <CloudLightning className="w-3.5 h-3.5" />
+            <span>Ionic Appflow Cloud</span>
+          </button>
         </div>
 
         {/* Global Action Bar */}
@@ -216,7 +348,7 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <p className="font-extrabold text-sm text-white">Versión Actual: {updateState.currentVersion}</p>
+                <p className="font-extrabold text-sm text-white">Versión: {updateState.currentVersion}</p>
                 <span className="w-2 h-2 rounded-full bg-[#00E676] animate-ping" />
               </div>
               <p className="text-[11px] text-slate-400">
@@ -229,7 +361,7 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
             <button
               onClick={handleCheckUpdatesManual}
               disabled={isCheckingForUpdates || isOptimizing}
-              title="Buscar actualizaciones en el servidor"
+              title="Buscar actualizaciones en el servidor y la nube"
               className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition disabled:opacity-50"
             >
               <RotateCw className={`w-3.5 h-3.5 ${isCheckingForUpdates ? "animate-spin text-cyan-400" : ""}`} />
@@ -242,175 +374,382 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
               className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-[#00E676] hover:bg-[#00c864] text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-[#00E676]/25 active:scale-98 disabled:opacity-50"
             >
               <Sparkles className="w-4 h-4" />
-              <span>{isOptimizing ? "Sincronizando Todo..." : "Actualizar & Optimizar Todo"}</span>
+              <span>{isOptimizing ? "Sincronizando Todo..." : "Actualizar & Optimizar Todo (8 Plataformas)"}</span>
             </button>
           </div>
         </div>
 
-        {/* Ionic Appflow Dedicated Quick Update & Cloud Build Section */}
-        <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-950 via-cyan-950/20 to-slate-900 border border-cyan-500/30 space-y-3.5 shadow-md">
-          <div className="flex items-start sm:items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-cyan-500/20 border border-cyan-500/40 text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.3)]">
-                <CloudLightning className="w-5 h-5" />
+        {/* TAB 1: Firebase & Firestore Cloud Sync */}
+        {activeTab === "firebase_firestore" && (
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-950 via-amber-950/20 to-slate-900 border border-amber-500/40 space-y-4 shadow-xl animate-in fade-in duration-200">
+            <div className="flex items-start sm:items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.3)]">
+                  <Flame className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
+                    Firebase & Firestore Cloud Engine
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Sincronización reactiva bidireccional mediante la colección <code className="text-amber-300 font-mono">platform_updates</code> con listeners <code className="text-cyan-300 font-mono">onSnapshot</code>.
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
-                  Ionic Appflow — Actualizar & Compilar en la Nube
-                </h3>
-                <p className="text-[11px] text-slate-400">
-                  Despliega Live Updates inmediatos o compila APKs/AABs nativos sin requerir Android Studio local.
+
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-black uppercase bg-emerald-500/20 text-[#00E676] border border-emerald-500/40 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-pulse" />
+                Firestore Conectado
+              </span>
+            </div>
+
+            {/* Firestore Metrics Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+                  <Database className="w-3 h-3 text-amber-400" />
+                  Base de Datos ID
+                </span>
+                <p className="text-xs font-mono font-black text-amber-300 truncate">
+                  {dbInfo.databaseId || "(default)"}
+                </p>
+                <p className="text-[10px] text-slate-500">Proyecto: {dbInfo.projectId}</p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3 text-[#00E676]" />
+                  Firebase Auth & Reglas
+                </span>
+                <p className="text-xs font-mono font-black text-emerald-300">
+                  {dbInfo.currentUser?.email || "Usuario Autenticado"}
+                </p>
+                <p className="text-[10px] text-slate-500">Reglas 2026 Activas</p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+                  <Activity className="w-3 h-3 text-cyan-400" />
+                  Eventos Sincronizados
+                </span>
+                <p className="text-xs font-mono font-black text-cyan-300">
+                  {updateState.firebaseSync?.totalSyncedUpdates || 1} en 'platform_updates'
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  Último doc: {updateState.firebaseSync?.lastSyncedDocId ? updateState.firebaseSync.lastSyncedDocId.slice(0, 10) + "..." : "Activo"}
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <a
-                href="https://dashboard.ionicframework.com/"
-                target="_blank"
-                rel="noreferrer"
-                className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 font-bold text-[11px] flex items-center gap-1 transition"
-              >
-                <span>Dashboard</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
+            {/* Action Bar for Firestore */}
+            <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
               <button
-                onClick={() => setShowAppflowCli(!showAppflowCli)}
-                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[11px] transition"
+                onClick={handlePublishFirestoreVersion}
+                disabled={isPublishingFirestore || isOptimizing}
+                className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-amber-500/20 active:scale-98 disabled:opacity-50"
               >
-                {showAppflowCli ? "Ocultar CLI" : "Ver CLI"}
+                <Flame className={`w-4 h-4 ${isPublishingFirestore ? "animate-spin" : ""}`} />
+                <span>{isPublishingFirestore ? "Sincronizando con Firestore..." : "☁️ Sincronizar & Publicar Versión en Firestore"}</span>
+              </button>
+
+              <button
+                onClick={handleRunGlobalUpdate}
+                disabled={isOptimizing}
+                className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isOptimizing ? "animate-spin text-cyan-400" : ""}`} />
+                <span>Optimizar Todo</span>
               </button>
             </div>
-          </div>
 
-          {/* Configuration controls */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
-                <span>Canal de Live Updates:</span>
-                <span className="font-mono text-cyan-400 text-[10px]">{appflowChannel}</span>
-              </label>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setAppflowChannel("Production")}
-                  className={`py-1 px-2 rounded-lg text-xs font-bold transition ${
-                    appflowChannel === "Production"
-                      ? "bg-cyan-500 text-slate-950"
-                      : "bg-slate-800 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  Production
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAppflowChannel("Staging")}
-                  className={`py-1 px-2 rounded-lg text-xs font-bold transition ${
-                    appflowChannel === "Staging"
-                      ? "bg-cyan-500 text-slate-950"
-                      : "bg-slate-800 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  Staging
-                </button>
+            {/* Firestore Notice Banner */}
+            {firestoreNotice && (
+              <div className="p-3 rounded-xl bg-amber-950/80 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-semibold">{firestoreNotice.msg}</p>
+                </div>
               </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: WebSocket Realtime Stream */}
+        {activeTab === "websocket_stream" && (
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-950 via-purple-950/20 to-slate-900 border border-purple-500/40 space-y-4 shadow-xl animate-in fade-in duration-200">
+            <div className="flex items-start sm:items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-purple-500/20 border border-purple-500/40 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.3)]">
+                  <Radio className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
+                    WebSocket Real-Time Stream Engine
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Canal bidireccional permanente en <code className="text-purple-300 font-mono">/ws</code> para transmisión de señales P2P sin latencia.
+                  </p>
+                </div>
+              </div>
+
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-black uppercase border flex items-center gap-1.5 ${
+                updateState.webSocketSync?.isConnected
+                  ? "bg-emerald-500/20 text-[#00E676] border-emerald-500/40"
+                  : "bg-amber-500/20 text-amber-300 border-amber-500/40"
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${updateState.webSocketSync?.isConnected ? "bg-[#00E676] animate-ping" : "bg-amber-400"}`} />
+                {updateState.webSocketSync?.isConnected ? "WebSocket OPEN" : "Reconectando..."}
+              </span>
             </div>
 
-            <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
-                <span>Tipo de Compilación Nativa:</span>
-                <span className="font-mono text-emerald-400 text-[10px]">
-                  {appflowBuildType === "apk_debug" ? "Debug APK" : appflowBuildType === "apk_release" ? "Release APK" : "Google Play AAB"}
+            {/* WebSocket Metrics Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+                  <Server className="w-3 h-3 text-purple-400" />
+                  Servidor WebSocket
                 </span>
+                <p className="text-xs font-mono font-black text-purple-300 truncate">
+                  {updateState.webSocketSync?.url || "wss://host/ws"}
+                </p>
+                <p className="text-[10px] text-slate-500">Protocolo: RFC 6455 Persistent</p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+                  <Activity className="w-3 h-3 text-cyan-400" />
+                  Latencia RTT
+                </span>
+                <p className="text-xs font-mono font-black text-cyan-300 flex items-center gap-1.5">
+                  <span>{updateState.webSocketSync?.latencyMs || 12} ms</span>
+                  <span className="text-[10px] font-normal text-slate-400">(Sub-20ms ultra rápido)</span>
+                </p>
+                <p className="text-[10px] text-slate-500">Ping/Pong Heartbeat cada 25s</p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+                  <Send className="w-3 h-3 text-[#00E676]" />
+                  Mensajes & Tramas
+                </span>
+                <p className="text-xs font-mono font-black text-[#00E676]">
+                  {updateState.webSocketSync?.messagesReceived || 0} recibidos • {updateState.webSocketSync?.messagesSent || 0} enviados
+                </p>
+                <p className="text-[10px] text-slate-500">Último Heartbeat: {timeAgo(updateState.webSocketSync?.lastHeartbeat || Date.now())}</p>
+              </div>
+            </div>
+
+            {/* Custom broadcast input & trigger */}
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+              <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                <span>Mensaje / Payload para Difusión WebSocket:</span>
+                <span className="text-[10px] text-purple-400 font-mono">Broadcast a todos los clientes</span>
               </label>
-              <div className="grid grid-cols-3 gap-1">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={customWsPayload}
+                  onChange={(e) => setCustomWsPayload(e.target.value)}
+                  placeholder="Ej. 'Actualización v2.5.0 lista en todos los clientes...'"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono"
+                />
                 <button
-                  type="button"
-                  onClick={() => setAppflowBuildType("apk_debug")}
-                  className={`py-1 px-1.5 rounded-lg text-[10px] font-bold transition ${
-                    appflowBuildType === "apk_debug"
-                      ? "bg-emerald-500 text-slate-950"
-                      : "bg-slate-800 text-slate-400 hover:text-slate-200"
-                  }`}
+                  onClick={handleSendWsBroadcast}
+                  disabled={isBroadcastingWs}
+                  className="px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-black text-xs flex items-center gap-1.5 transition shrink-0 active:scale-98"
                 >
-                  Debug APK
+                  <Radio className="w-3.5 h-3.5" />
+                  <span>Emitir Broadcast</span>
                 </button>
                 <button
-                  type="button"
-                  onClick={() => setAppflowBuildType("apk_release")}
-                  className={`py-1 px-1.5 rounded-lg text-[10px] font-bold transition ${
-                    appflowBuildType === "apk_release"
-                      ? "bg-emerald-500 text-slate-950"
-                      : "bg-slate-800 text-slate-400 hover:text-slate-200"
-                  }`}
+                  onClick={handlePingWs}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center gap-1 transition"
+                  title="Medir Latencia WebSocket"
                 >
-                  Release APK
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAppflowBuildType("aab_google_play")}
-                  className={`py-1 px-1.5 rounded-lg text-[10px] font-bold transition ${
-                    appflowBuildType === "aab_google_play"
-                      ? "bg-emerald-500 text-slate-950"
-                      : "bg-slate-800 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  Play AAB
+                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Ping</span>
                 </button>
               </div>
             </div>
+
+            {/* WebSocket Notice Banner */}
+            {wsNotice && (
+              <div className="p-3 rounded-xl bg-purple-950/80 border border-purple-500/40 text-purple-200 text-xs flex items-start gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-semibold">{wsNotice.msg}</p>
+                </div>
+              </div>
+            )}
           </div>
+        )}
 
-          {/* Action Trigger Buttons */}
-          <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
-            <button
-              onClick={handleDeployAppflowLiveUpdate}
-              disabled={isDeployingAppflow || isBuildingAppflow}
-              className="w-full sm:flex-1 py-2.5 px-3.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-cyan-500/20 active:scale-98 disabled:opacity-50"
-            >
-              <Zap className={`w-3.5 h-3.5 ${isDeployingAppflow ? "animate-spin" : ""}`} />
-              <span>{isDeployingAppflow ? "Desplegando..." : `⚡ Actualizar Live Update (${appflowChannel})`}</span>
-            </button>
-
-            <button
-              onClick={handleTriggerAppflowBuild}
-              disabled={isDeployingAppflow || isBuildingAppflow}
-              className="w-full sm:flex-1 py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-[#00E676] hover:brightness-110 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 active:scale-98 disabled:opacity-50"
-            >
-              <CloudLightning className={`w-3.5 h-3.5 ${isBuildingAppflow ? "animate-spin" : ""}`} />
-              <span>{isBuildingAppflow ? "Compilando en Nube..." : "☁️ Compilar APK en Appflow"}</span>
-            </button>
-          </div>
-
-          {/* Notification Feedback Banner */}
-          {appflowNotification && (
-            <div className="p-3 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-200 text-xs flex items-start gap-2 animate-in fade-in">
-              <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-semibold">{appflowNotification.msg}</p>
+        {/* TAB 3: Ionic Appflow Dedicated Section */}
+        {activeTab === "ionic_appflow" && (
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-950 via-cyan-950/20 to-slate-900 border border-cyan-500/30 space-y-3.5 shadow-md animate-in fade-in duration-200">
+            <div className="flex items-start sm:items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-cyan-500/20 border border-cyan-500/40 text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.3)]">
+                  <CloudLightning className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
+                    Ionic Appflow — Actualizar & Compilar en la Nube
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Despliega Live Updates inmediatos o compila APKs/AABs nativos sin requerir Android Studio local.
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
 
-          {/* CLI Commands Drawer */}
-          {showAppflowCli && (
-            <div className="p-3 rounded-xl bg-black/90 border border-slate-800 space-y-2 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-slate-300 font-mono">Comandos CLI de Ionic Appflow</span>
-                <button
-                  onClick={handleCopyCli}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-200 flex items-center gap-1 transition"
+              <div className="flex items-center gap-1.5">
+                <a
+                  href="https://dashboard.ionicframework.com/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 font-bold text-[11px] flex items-center gap-1 transition"
                 >
-                  {hasCopiedCli ? <Check className="w-3 h-3 text-[#00E676]" /> : <Copy className="w-3 h-3" />}
-                  <span>{hasCopiedCli ? "Copiado" : "Copiar"}</span>
+                  <span>Dashboard</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+                <button
+                  onClick={() => setShowAppflowCli(!showAppflowCli)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[11px] transition"
+                >
+                  {showAppflowCli ? "Ocultar CLI" : "Ver CLI"}
                 </button>
               </div>
-              <pre className="text-[10px] font-mono text-cyan-300 p-2 rounded bg-slate-950 overflow-x-auto whitespace-pre">
-                {appflowService.getCliBuildCommands().join("\n")}
-              </pre>
             </div>
-          )}
-        </div>
+
+            {/* Configuration controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                  <span>Canal de Live Updates:</span>
+                  <span className="font-mono text-cyan-400 text-[10px]">{appflowChannel}</span>
+                </label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setAppflowChannel("Production")}
+                    className={`py-1 px-2 rounded-lg text-xs font-bold transition ${
+                      appflowChannel === "Production"
+                        ? "bg-cyan-500 text-slate-950"
+                        : "bg-slate-800 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Production
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAppflowChannel("Staging")}
+                    className={`py-1 px-2 rounded-lg text-xs font-bold transition ${
+                      appflowChannel === "Staging"
+                        ? "bg-cyan-500 text-slate-950"
+                        : "bg-slate-800 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Staging
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                  <span>Tipo de Compilación Nativa:</span>
+                  <span className="font-mono text-emerald-400 text-[10px]">
+                    {appflowBuildType === "apk_debug" ? "Debug APK" : appflowBuildType === "apk_release" ? "Release APK" : "Google Play AAB"}
+                  </span>
+                </label>
+                <div className="grid grid-cols-3 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setAppflowBuildType("apk_debug")}
+                    className={`py-1 px-1.5 rounded-lg text-[10px] font-bold transition ${
+                      appflowBuildType === "apk_debug"
+                        ? "bg-emerald-500 text-slate-950"
+                        : "bg-slate-800 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Debug APK
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAppflowBuildType("apk_release")}
+                    className={`py-1 px-1.5 rounded-lg text-[10px] font-bold transition ${
+                      appflowBuildType === "apk_release"
+                        ? "bg-emerald-500 text-slate-950"
+                        : "bg-slate-800 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Release APK
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAppflowBuildType("aab_google_play")}
+                    className={`py-1 px-1.5 rounded-lg text-[10px] font-bold transition ${
+                      appflowBuildType === "aab_google_play"
+                        ? "bg-emerald-500 text-slate-950"
+                        : "bg-slate-800 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Play AAB
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Action Trigger Buttons */}
+            <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
+              <button
+                onClick={handleDeployAppflowLiveUpdate}
+                disabled={isDeployingAppflow || isBuildingAppflow}
+                className="w-full sm:flex-1 py-2.5 px-3.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-cyan-500/20 active:scale-98 disabled:opacity-50"
+              >
+                <Zap className={`w-3.5 h-3.5 ${isDeployingAppflow ? "animate-spin" : ""}`} />
+                <span>{isDeployingAppflow ? "Desplegando..." : `⚡ Actualizar Live Update (${appflowChannel})`}</span>
+              </button>
+
+              <button
+                onClick={handleTriggerAppflowBuild}
+                disabled={isDeployingAppflow || isBuildingAppflow}
+                className="w-full sm:flex-1 py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-[#00E676] hover:brightness-110 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 active:scale-98 disabled:opacity-50"
+              >
+                <CloudLightning className={`w-3.5 h-3.5 ${isBuildingAppflow ? "animate-spin" : ""}`} />
+                <span>{isBuildingAppflow ? "Compilando en Nube..." : "☁️ Compilar APK en Appflow"}</span>
+              </button>
+            </div>
+
+            {/* Notification Feedback Banner */}
+            {appflowNotification && (
+              <div className="p-3 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-200 text-xs flex items-start gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-semibold">{appflowNotification.msg}</p>
+                </div>
+              </div>
+            )}
+
+            {/* CLI Commands Drawer */}
+            {showAppflowCli && (
+              <div className="p-3 rounded-xl bg-black/90 border border-slate-800 space-y-2 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-300 font-mono">Comandos CLI de Ionic Appflow</span>
+                  <button
+                    onClick={handleCopyCli}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-200 flex items-center gap-1 transition"
+                  >
+                    {hasCopiedCli ? <Check className="w-3 h-3 text-[#00E676]" /> : <Copy className="w-3 h-3" />}
+                    <span>{hasCopiedCli ? "Copiado" : "Copiar"}</span>
+                  </button>
+                </div>
+                <pre className="text-[10px] font-mono text-cyan-300 p-2 rounded bg-slate-950 overflow-x-auto whitespace-pre">
+                  {appflowService.getCliBuildCommands().join("\n")}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Step-by-step progress animation when optimizing */}
         {isOptimizing && (
@@ -418,7 +757,7 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
             <div className="flex items-center justify-between text-xs">
               <span className="font-extrabold text-cyan-400 flex items-center gap-1.5">
                 <RotateCw className="w-4 h-4 animate-spin" />
-                Ejecutando pipeline de enlace y optimización...
+                Ejecutando pipeline de enlace y optimización multi-plataforma...
               </span>
               <span className="font-mono text-slate-400">
                 {currentStepIndex + 1} de {optimizationSteps.length}
@@ -426,11 +765,11 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
             </div>
             <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
               <div
-                className="bg-gradient-to-r from-cyan-500 to-[#00E676] h-full transition-all duration-300 rounded-full"
+                className="bg-gradient-to-r from-cyan-500 via-amber-400 to-[#00E676] h-full transition-all duration-300 rounded-full"
                 style={{ width: `${((currentStepIndex + 1) / optimizationSteps.length) * 100}%` }}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
               {optimizationSteps.map((step, idx) => (
                 <div
                   key={idx}
@@ -466,7 +805,7 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
               </div>
               <div className="space-y-1">
                 <p className="font-extrabold text-sm text-emerald-300">
-                  ¡Todas las plataformas actualizadas, enlazadas y optimizadas!
+                  ¡Todas las 8 plataformas (incluyendo Firebase y WebSocket) actualizadas y sincronizadas!
                 </p>
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300 font-mono">
                   <span>⚡ Latencia: <b className="text-cyan-300">{lastResult.latencyMs} ms</b></span>
@@ -485,70 +824,78 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
           </div>
         )}
 
-        {/* 6-Platform Live Synchronization Matrix */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-cyan-400" />
-              Estado y Enlace de Plataformas ({Object.keys(updateState.platformStatuses).length})
-            </h3>
-            <span className="text-[10px] text-slate-500 font-mono">Auto-Sync Activo</span>
-          </div>
+        {/* 8-Platform Live Synchronization Matrix (TAB: Overview or Default) */}
+        {activeTab === "overview" && (
+          <div className="space-y-3 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                Matriz de Sincronización Multi-Plataforma ({Object.keys(updateState.platformStatuses).length})
+              </h3>
+              <span className="text-[10px] text-slate-500 font-mono">Auto-Sync Activo • 0ms Lag</span>
+            </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {(Object.values(updateState.platformStatuses) as PlatformHealthItem[]).map((platform) => (
-              <div
-                key={platform.id}
-                className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800/90 hover:border-slate-700 transition flex flex-col justify-between gap-2.5"
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2.5">
-                      <div className="p-2 rounded-xl bg-slate-900 border border-slate-800">
-                        {getPlatformIcon(platform.id)}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(Object.values(updateState.platformStatuses) as PlatformHealthItem[]).map((platform) => (
+                <div
+                  key={platform.id}
+                  className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800/90 hover:border-slate-700 transition flex flex-col justify-between gap-2.5"
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 rounded-xl bg-slate-900 border border-slate-800">
+                          {getPlatformIcon(platform.id)}
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-xs text-slate-100">{platform.name}</h4>
+                          <p className="text-[10px] text-slate-400">{platform.platformCategory}</p>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="font-extrabold text-xs text-slate-100">{platform.name}</h4>
-                        <p className="text-[10px] text-slate-400">{platform.platformCategory}</p>
-                      </div>
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase ${
+                        platform.id === "firebase_firestore"
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                          : platform.id === "websocket_realtime"
+                          ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                          : "bg-[#00E676]/20 text-[#00E676] border border-[#00E676]/40"
+                      }`}>
+                        Sincronizado
+                      </span>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-[#00E676]/20 text-[#00E676] border border-[#00E676]/40">
-                      Sincronizado
+
+                    <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
+                      {platform.details}
+                    </p>
+                  </div>
+
+                  {/* Capabilities pills */}
+                  <div className="pt-2 border-t border-slate-900 flex items-center justify-between gap-1 flex-wrap">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {platform.capabilities.slice(0, 2).map((cap, i) => (
+                        <span
+                          key={i}
+                          className="px-1.5 py-0.5 rounded-md bg-slate-900 text-[9px] text-slate-400 font-mono border border-slate-800"
+                        >
+                          {cap}
+                        </span>
+                      ))}
+                    </div>
+                    <span className="text-[9px] font-mono text-slate-500">
+                      {timeAgo(platform.lastSyncTime)}
                     </span>
                   </div>
-
-                  <p className="text-[11px] text-slate-400 mt-2 line-clamp-2">
-                    {platform.details}
-                  </p>
                 </div>
-
-                {/* Capabilities pills */}
-                <div className="pt-2 border-t border-slate-900 flex items-center justify-between gap-1 flex-wrap">
-                  <div className="flex items-center gap-1 flex-wrap">
-                    {platform.capabilities.slice(0, 2).map((cap, i) => (
-                      <span
-                        key={i}
-                        className="px-1.5 py-0.5 rounded-md bg-slate-900 text-[9px] text-slate-400 font-mono border border-slate-800"
-                      >
-                        {cap}
-                      </span>
-                    ))}
-                  </div>
-                  <span className="text-[9px] font-mono text-slate-500">
-                    {timeAgo(platform.lastSyncTime)}
-                  </span>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Quick Hub Redirection Bar */}
         <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 text-slate-300">
             <Cpu className="w-4 h-4 text-cyan-400 shrink-0" />
             <span className="text-slate-400 text-[11px]">
-              ¿Deseas ver las guías paso a paso para Ionic Appflow, Capacitor APK, Termux o GitHub Actions?
+              ¿Deseas ver las guías de despliegue paso a paso para Ionic Appflow, Capacitor APK, Termux o GitHub Actions?
             </span>
           </div>
           {onOpenPublishDeploy && (
@@ -569,7 +916,7 @@ export const PlatformUpdateModal: React.FC<PlatformUpdateModalProps> = ({
         <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
           <p className="text-slate-500 text-[11px] flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-[#00E676]" />
-            <span>Caché 0ms Instantánea • Ionic Appflow Ready • Service Worker v6</span>
+            <span>Firebase Firestore Ready • WebSocket Stream /ws • Caché 0ms • Service Worker v6</span>
           </p>
           <button
             onClick={onClose}

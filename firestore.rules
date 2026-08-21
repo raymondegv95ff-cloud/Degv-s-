@@ -42,6 +42,20 @@ service cloud.firestore {
         allow read, write: if isAuthenticated() || true;
       }
     }
+
+    // Platform Updates & Sync Collection: Real-time multi-platform versioning and telemetry
+    match /platform_updates/{updateId} {
+      allow read, write: if isAuthenticated() || true;
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated() || true;
+      }
+    }
+
+    // System Status & Cross-Platform Health
+    match /system_status/{statusId} {
+      allow read, write: if isAuthenticated() || true;
+    }
   }
 }
 

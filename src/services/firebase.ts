@@ -932,3 +932,109 @@ export async function saveRoomToFirestore(room: Room): Promise<void> {
     console.warn("[Firestore] saveRoomToFirestore notice:", e);
   }
 }
+
+/**
+ * 6. Publicar actualización y sincronización de plataforma en Firestore
+ */
+export async function publishPlatformUpdateToFirestore(payload: {
+  version: string;
+  channel?: string;
+  sourcePlatform?: string;
+  platformsSynced?: string[];
+  latencyMs?: number;
+  freedBytes?: number;
+  metadata?: any;
+}): Promise<string | null> {
+  try {
+    const updatesCol = collection(db, "platform_updates");
+    const docData = {
+      version: payload.version,
+      channel: payload.channel || "Production",
+      sourcePlatform: payload.sourcePlatform || "web_pwa",
+      platformsSynced: payload.platformsSynced || [],
+      latencyMs: payload.latencyMs || 0,
+      freedBytes: payload.freedBytes || 0,
+      metadata: payload.metadata || {},
+      publisherId: auth.currentUser?.uid || "system_client",
+      publisherEmail: auth.currentUser?.email || "anonymous@degvs.app",
+      timestamp: Date.now(),
+      createdAt: serverTimestamp(),
+    };
+
+    console.log(`[Firestore Updates] 🚀 Publicando versión '${payload.version}' en Firestore ('platform_updates')...`, docData);
+    const docRef = await addDoc(updatesCol, docData);
+
+    // Also update current active version marker in system_status
+    try {
+      const statusRef = doc(db, "system_status", "latest_version");
+      await setDoc(
+        statusRef,
+        {
+          currentVersion: payload.version,
+          latestUpdateDocId: docRef.id,
+          lastSyncedAt: Date.now(),
+          updatedAt: serverTimestamp(),
+          source: payload.sourcePlatform || "client",
+        },
+        { merge: true }
+      );
+    } catch (err2) {
+      console.warn("[Firestore Updates] Warning writing latest_version doc:", err2);
+    }
+
+    console.log(`[Firestore Updates] ✅ Versión publicada con éxito. Doc ID: ${docRef.id}`);
+    return docRef.id;
+  } catch (error) {
+    console.error("[Firestore Updates] ❌ Error publicando actualización en Firestore:", error);
+    return null;
+  }
+}
+
+/**
+ * 7. Escuchar actualizaciones de plataforma en tiempo real desde Firestore
+ */
+export function listenForPlatformUpdatesFromFirestore(
+  callback: (updates: any[]) => void
+): Unsubscribe {
+  try {
+    const updatesCol = collection(db, "platform_updates");
+
+    console.log("[Firestore Updates] 📡 Inicializando listener reactivo onSnapshot en 'platform_updates'...");
+
+    return onSnapshot(
+      updatesCol,
+      (snapshot) => {
+        const list: any[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push({
+            id: docSnap.id,
+            ...docSnap.data(),
+          });
+        });
+        // Ordenar en memoria por timestamp descendente
+        list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        console.log(`[Firestore Updates] 📥 [onSnapshot] ${list.length} registros de actualización recibidos desde Firestore.`);
+        callback(list);
+      },
+      (error) => {
+        console.warn("[Firestore Updates] Notice en listener de 'platform_updates':", error.message || error);
+      }
+    );
+  } catch (err) {
+    console.warn("[Firestore Updates] Excepción en listenForPlatformUpdatesFromFirestore:", err);
+    return () => {};
+  }
+}
+
+/**
+ * 8. Obtener información de estado de Firebase y Firestore
+ */
+export function getFirebaseDatabaseInfo() {
+  return {
+    appName: app.name,
+    databaseId: (firebaseConfig as any).firestoreDatabaseId || "(default)",
+    projectId: (firebaseConfig as any).projectId || "degvs-messenger",
+    isAuthReady: !!auth,
+    currentUser: auth.currentUser ? { uid: auth.currentUser.uid, email: auth.currentUser.email } : null,
+  };
+}

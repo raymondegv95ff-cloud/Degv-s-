@@ -214,7 +214,35 @@ export interface StickerPack {
   isCustom?: boolean;
 }
 
-export type PlatformType = "web_pwa" | "android_capacitor" | "ionic_appflow" | "google_play_twa" | "termux_linux" | "github_antigravity";
+export type PlatformType =
+  | "web_pwa"
+  | "android_capacitor"
+  | "ionic_appflow"
+  | "google_play_twa"
+  | "termux_linux"
+  | "github_antigravity"
+  | "firebase_firestore"
+  | "websocket_realtime";
+
+export interface FirebaseSyncInfo {
+  isConnected: boolean;
+  databaseId?: string;
+  lastSyncedDocId?: string;
+  remoteVersion?: string;
+  lastRemoteSyncTime?: number;
+  authUserId?: string;
+  totalSyncedUpdates?: number;
+}
+
+export interface WebSocketSyncInfo {
+  isConnected: boolean;
+  url: string;
+  latencyMs: number;
+  lastHeartbeat: number;
+  messagesSent: number;
+  messagesReceived: number;
+  lastBroadcastPayload?: any;
+}
 
 export interface AppflowConfig {
   appId: string;
@@ -317,5 +345,7 @@ export interface CrossPlatformUpdateState {
   platformStatuses: Record<PlatformType, PlatformHealthItem>;
   autoUpdateEnabled: boolean;
   diagnostics?: SystemDiagnostics;
+  firebaseSync?: FirebaseSyncInfo;
+  webSocketSync?: WebSocketSyncInfo;
 }
 
