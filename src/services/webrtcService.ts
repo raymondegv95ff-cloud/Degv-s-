@@ -244,18 +244,30 @@ class WebRTCService {
     const callIceCandidatesCollection = collection(db, "calls", callId, "iceCandidates");
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("[Degv's WebRTC] 📤 [Caller ICE] Emitiendo candidato ICE a Firestore:", event.candidate.candidate.substring(0, 40));
+        console.log("[Degv's WebRTC: ICE Signaling] 📤 [Caller onicecandidate] Candidato local generado:", {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+          type: event.candidate.type || "host/srflx",
+          protocol: event.candidate.protocol,
+          address: event.candidate.address,
+          port: event.candidate.port,
+        });
         const candPayload = {
           ...event.candidate.toJSON(),
           senderId: caller.id,
           role: "caller",
           timestamp: Date.now(),
         };
-        addDoc(callerCandidatesCollection, candPayload).catch(() => {});
+        addDoc(callerCandidatesCollection, candPayload)
+          .then(() => console.log(`[Degv's WebRTC: ICE Signaling] ✅ Candidato ICE caller guardado en 'calls/${callId}/callerCandidates'`))
+          .catch((err) => console.error(`[Degv's WebRTC: ICE Signaling] ❌ Error guardando ICE caller candidate:`, err));
         addDoc(callIceCandidatesCollection, candPayload).catch(() => {});
         if (roomId) {
           addDoc(collection(db, "rooms", roomId, "iceCandidates"), candPayload).catch(() => {});
         }
+      } else {
+        console.log("[Degv's WebRTC: ICE Signaling] 🏁 [Caller onicecandidate] Recolección de candidatos ICE finalizada (null candidate)");
       }
     };
 
@@ -385,18 +397,30 @@ class WebRTCService {
     const callIceCandidatesCollection = collection(db, "calls", callId, "iceCandidates");
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("[Degv's WebRTC] 📤 [Callee ICE] Emitiendo candidato ICE del receptor a Firestore");
+        console.log("[Degv's WebRTC: ICE Signaling] 📤 [Callee onicecandidate] Candidato local generado:", {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+          type: event.candidate.type || "host/srflx",
+          protocol: event.candidate.protocol,
+          address: event.candidate.address,
+          port: event.candidate.port,
+        });
         const candPayload = {
           ...event.candidate.toJSON(),
           senderId: callData.calleeId,
           role: "callee",
           timestamp: Date.now(),
         };
-        addDoc(calleeCandidatesCollection, candPayload).catch(() => {});
+        addDoc(calleeCandidatesCollection, candPayload)
+          .then(() => console.log(`[Degv's WebRTC: ICE Signaling] ✅ Candidato ICE callee guardado en 'calls/${callId}/calleeCandidates'`))
+          .catch((err) => console.error(`[Degv's WebRTC: ICE Signaling] ❌ Error guardando ICE callee candidate:`, err));
         addDoc(callIceCandidatesCollection, candPayload).catch(() => {});
         if (callData.roomId) {
           addDoc(collection(db, "rooms", callData.roomId, "iceCandidates"), candPayload).catch(() => {});
         }
+      } else {
+        console.log("[Degv's WebRTC: ICE Signaling] 🏁 [Callee onicecandidate] Recolección de candidatos ICE del receptor finalizada (null candidate)");
       }
     };
 

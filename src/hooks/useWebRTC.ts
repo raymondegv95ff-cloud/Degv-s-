@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { webrtcService, CallSession } from "../services/webrtcService";
 import { UserProfile } from "../types";
 import { soundService } from "../services/soundService";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { db } from "../services/firebase";
 
 export interface WebRTCState {
   activeCall: CallSession | null;
@@ -28,19 +30,19 @@ export function useWebRTC(currentUser: UserProfile | null) {
 
   const durationTimerRef = useRef<any>(null);
 
-  // Escuchar llamadas entrantes dirigidas al usuario actual mediante Firestore listener
+  // 1. Escuchar llamadas entrantes dirigidas al usuario actual mediante Firestore onSnapshot
   useEffect(() => {
     if (!currentUser?.id) return;
 
-    console.log(`[useWebRTC] 📡 [Incoming Listener] Iniciando suscripción Firestore para llamadas hacia user ID: ${currentUser.id}`);
+    console.log(`[useWebRTC: Firestore Signaling] 📡 [Incoming Listener] Iniciando suscripción Firestore para llamadas entrantes hacia user ID: ${currentUser.id}`);
     const unsub = webrtcService.listenForIncomingCalls(currentUser.id, (call) => {
       // Ignorar si ya está en una llamada activa
       if (activeCall) {
-        console.log(`[useWebRTC] ⚠️ Llamada entrante ${call.id} ignorada porque ya hay una llamada activa (${activeCall.id})`);
+        console.log(`[useWebRTC: Firestore Signaling] ⚠️ Llamada entrante ${call.id} ignorada: ya hay una llamada activa en curso (${activeCall.id})`);
         return;
       }
 
-      console.log("[useWebRTC] 🔔 [Incoming Call] Nueva llamada entrante detectada vía Firestore:", {
+      console.log("[useWebRTC: Firestore Signaling] 🔔 [Incoming Call] Nueva llamada entrante recibida vía Firestore onSnapshot:", {
         callId: call.id,
         callerId: call.callerId,
         callerName: call.callerName,
@@ -60,15 +62,15 @@ export function useWebRTC(currentUser: UserProfile | null) {
     });
 
     return () => {
-      console.log(`[useWebRTC] 🔌 [Incoming Listener] Cancelando suscripción de llamadas para user ID: ${currentUser.id}`);
+      console.log(`[useWebRTC: Firestore Signaling] 🔌 [Incoming Listener] Cancelando suscripción de llamadas para user ID: ${currentUser.id}`);
       unsub();
     };
   }, [currentUser?.id, activeCall]);
 
-  // Escuchar pistas de stream remoto y cambios de estado P2P
+  // 2. Escuchar pistas de stream remoto y cambios de estado P2P
   useEffect(() => {
     const unsub = webrtcService.onRemoteStream((stream) => {
-      console.log("[useWebRTC] 🎯 [Remote Stream] Actualizando remoteStream en React state:", {
+      console.log("[useWebRTC: Firestore Signaling] 🎯 [Remote Stream Received] Actualizando remoteStream en React state:", {
         audioTracks: stream.getAudioTracks().length,
         videoTracks: stream.getVideoTracks().length,
         active: stream.active,
@@ -78,11 +80,11 @@ export function useWebRTC(currentUser: UserProfile | null) {
     });
 
     const unsubStatus = webrtcService.onCallStatusChange((status) => {
-      console.log("[useWebRTC] 🔄 [Call Status Transition] Cambio de estado de llamada en Firestore:", status);
+      console.log("[useWebRTC: Firestore Signaling] 🔄 [Call Status Transition] Cambio de estado de llamada en Firestore:", status);
       if (status === "accepted") {
         setIsConnected(true);
       } else if (status === "declined" || status === "ended") {
-        console.log("[useWebRTC] 🛑 [Call Terminated] Llamada finalizada o rechazada.");
+        console.log("[useWebRTC: Firestore Signaling] 🛑 [Call Terminated] Llamada finalizada o rechazada por el par remoto.");
         endCallCleanly();
       }
     });
@@ -93,7 +95,38 @@ export function useWebRTC(currentUser: UserProfile | null) {
     };
   }, []);
 
-  // Contador de duración de llamada activa
+  // 3. Listener auxiliar de subcolección 'offers' en sala activa (Firestore onSnapshot)
+  useEffect(() => {
+    if (!activeCall?.roomId) return;
+    const roomId = activeCall.roomId;
+    console.log(`[useWebRTC: Firestore Signaling] 👂 [Room Subcollection Listener] Monitoreando subcolección 'rooms/${roomId}/offers'...`);
+
+    const offersQuery = query(
+      collection(db, "rooms", roomId, "offers"),
+      where("timestamp", ">=", activeCall.createdAt - 5000)
+    );
+
+    const unsubRoomOffers = onSnapshot(offersQuery, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const offerData = change.doc.data();
+          console.log(`[useWebRTC: Firestore Signaling] 📥 [Room Subcollection: Offer Detected] en room '${roomId}':`, {
+            docId: change.doc.id,
+            callerId: offerData.callerId,
+            type: offerData.type,
+          });
+        }
+      });
+    }, (err) => {
+      console.warn(`[useWebRTC: Firestore Signaling] Aviso en listener de subcolección de sala:`, err.message);
+    });
+
+    return () => {
+      unsubRoomOffers();
+    };
+  }, [activeCall?.roomId, activeCall?.createdAt]);
+
+  // 4. Contador de duración de llamada activa
   useEffect(() => {
     if (isConnected) {
       setCallDuration(0);
@@ -108,12 +141,12 @@ export function useWebRTC(currentUser: UserProfile | null) {
     };
   }, [isConnected]);
 
-  // Iniciar llamada saliente
+  // 5. Iniciar llamada saliente (Negotiation Step 1: Offer)
   const startCall = useCallback(
     async (targetUser: UserProfile, isVideo: boolean, roomId: string = "") => {
       if (!currentUser) return;
 
-      console.log(`[useWebRTC] 🚀 [startCall] Iniciando ${isVideo ? "videollamada" : "llamada de voz"} a:`, {
+      console.log(`[useWebRTC: Firestore Signaling] 🚀 [startCall: Step 1] Iniciando ${isVideo ? "videollamada" : "llamada de voz"} hacia ${targetUser.username || targetUser.firstName}:`, {
         targetUserId: targetUser.id,
         targetUsername: targetUser.username,
         roomId,
@@ -132,6 +165,7 @@ export function useWebRTC(currentUser: UserProfile | null) {
           soundService.playCallRingSound();
         }
 
+        console.log(`[useWebRTC: Firestore Signaling] 🔄 [Negotiation: Creating SDP Offer & Publishing to Firestore 'calls' and 'rooms']`);
         const { callId, localStream: stream } = await webrtcService.startCall({
           caller: currentUser,
           callee: targetUser,
@@ -139,7 +173,7 @@ export function useWebRTC(currentUser: UserProfile | null) {
           isVideo,
         });
 
-        console.log(`[useWebRTC] 📞 [startCall] Llamada ${callId} en curso, esperando que el receptor conteste...`);
+        console.log(`[useWebRTC: Firestore Signaling] 📞 [Negotiation: Offer Published] Llamada ${callId} activa en Firestore, esperando SDP Answer vía onSnapshot...`);
 
         setLocalStream(stream);
         setActiveCall({
@@ -156,18 +190,18 @@ export function useWebRTC(currentUser: UserProfile | null) {
           createdAt: Date.now(),
         });
       } catch (err: any) {
-        console.error("[useWebRTC] ❌ [startCall Error] Error crítico al iniciar llamada:", err);
+        console.error("[useWebRTC: Firestore Signaling] ❌ [startCall Error] Error crítico durante la negociación de llamada:", err);
         endCallCleanly();
       }
     },
     [currentUser]
   );
 
-  // Aceptar llamada entrante
+  // 6. Aceptar llamada entrante (Negotiation Step 2: Remote Offer & Local Answer)
   const answerCall = useCallback(async () => {
     if (!incomingCall) return;
 
-    console.log(`[useWebRTC] 📞 [answerCall] Aceptando llamada entrante ${incomingCall.id} de ${incomingCall.callerName}...`);
+    console.log(`[useWebRTC: Firestore Signaling] 📞 [answerCall: Step 2] Aceptando llamada entrante ${incomingCall.id} de ${incomingCall.callerName}...`);
 
     try {
       const call = incomingCall;
@@ -177,28 +211,29 @@ export function useWebRTC(currentUser: UserProfile | null) {
       setIsMuted(false);
       setIsCalling(true);
 
+      console.log(`[useWebRTC: Firestore Signaling] 🔄 [Negotiation: Setting Remote Offer, Creating SDP Answer, and Publishing to Firestore]`);
       const { localStream: stream } = await webrtcService.answerCall(call.id, call.type === "video");
-      console.log(`[useWebRTC] ✅ [answerCall] Conexión establecida localmente, stream listo`);
+      console.log(`[useWebRTC: Firestore Signaling] ✅ [Negotiation: Answer Published] Conexión P2P en curso, stream local listo`);
       setLocalStream(stream);
       setIsConnected(true);
     } catch (err: any) {
-      console.error("[useWebRTC] ❌ [answerCall Error] Error al aceptar llamada:", err);
+      console.error("[useWebRTC: Firestore Signaling] ❌ [answerCall Error] Error al responder y negociar SDP Answer:", err);
       endCallCleanly();
     }
   }, [incomingCall]);
 
-  // Rechazar llamada entrante
+  // 7. Rechazar llamada entrante
   const declineCall = useCallback(async () => {
     if (incomingCall) {
-      console.log(`[useWebRTC] ❌ [declineCall] Rechazando llamada entrante ${incomingCall.id}`);
+      console.log(`[useWebRTC: Firestore Signaling] ❌ [declineCall] Rechazando llamada entrante ${incomingCall.id} en Firestore`);
       await webrtcService.declineCall(incomingCall.id);
       setIncomingCall(null);
     }
   }, [incomingCall]);
 
-  // Finalizar llamada activa
+  // 8. Finalizar llamada activa
   const endCallCleanly = useCallback(() => {
-    console.log(`[useWebRTC] 📴 [endCallCleanly] Finalizando sesión de llamada activa ${activeCall?.id || ""}`);
+    console.log(`[useWebRTC: Firestore Signaling] 📴 [endCallCleanly] Finalizando sesión de llamada activa ${activeCall?.id || ""}`);
     webrtcService.endCall(activeCall?.id);
     setActiveCall(null);
     setIncomingCall(null);
@@ -210,17 +245,17 @@ export function useWebRTC(currentUser: UserProfile | null) {
     if (durationTimerRef.current) clearInterval(durationTimerRef.current);
   }, [activeCall?.id]);
 
-  // Controles de audio y video
+  // 9. Controles de audio y video
   const toggleMute = useCallback(() => {
     const nextMute = !isMuted;
-    console.log(`[useWebRTC] 🎙️ [toggleMute] Micrófono ${nextMute ? "silenciado" : "activado"}`);
+    console.log(`[useWebRTC: Media Control] 🎙️ [toggleMute] Micrófono ${nextMute ? "silenciado" : "activado"}`);
     setIsMuted(nextMute);
     webrtcService.toggleMicrophone(nextMute);
   }, [isMuted]);
 
   const toggleVideo = useCallback(() => {
     const nextVideo = !isVideoOn;
-    console.log(`[useWebRTC] 📷 [toggleVideo] Cámara ${nextVideo ? "activada" : "desactivada"}`);
+    console.log(`[useWebRTC: Media Control] 📷 [toggleVideo] Cámara ${nextVideo ? "activada" : "desactivada"}`);
     setIsVideoOn(nextVideo);
     webrtcService.toggleCamera(nextVideo);
   }, [isVideoOn]);
@@ -243,3 +278,4 @@ export function useWebRTC(currentUser: UserProfile | null) {
     toggleVideo,
   };
 }
+
