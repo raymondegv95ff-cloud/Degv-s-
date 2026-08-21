@@ -19,6 +19,7 @@ import {
   ZoomIn,
   Download,
   Clock,
+  AlertTriangle,
 } from "lucide-react";
 
 interface MessageBubbleProps {
@@ -382,16 +383,30 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
           {isMe && (
             <span>
-              {message.status === "queued" || message.status === "sending" ? (
+              {message.status === "failed" ? (
+                <span title="Error de red - Se reintentará automáticamente">
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                </span>
+              ) : message.status === "sending" ? (
+                <span title="Enviando a Firestore...">
+                  <Clock className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                </span>
+              ) : message.status === "pending" || message.status === "queued" ? (
                 <span title="En cola local (IndexedDB) - esperando conexión">
                   <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
                 </span>
-              ) : message.isRead && readReceiptsEnabled !== false ? (
-                <CheckCheck className="w-3.5 h-3.5 text-[#00E676]" />
-              ) : message.isRead ? (
-                <CheckCheck className="w-3.5 h-3.5 text-slate-400" />
+              ) : message.status === "read" || (message.isRead && readReceiptsEnabled !== false) ? (
+                <span title="Leído">
+                  <CheckCheck className="w-3.5 h-3.5 text-[#00E676]" />
+                </span>
+              ) : message.status === "delivered" ? (
+                <span title="Entregado">
+                  <CheckCheck className="w-3.5 h-3.5 text-slate-400" />
+                </span>
               ) : (
-                <Check className="w-3.5 h-3.5 text-slate-400" />
+                <span title="Enviado a Firestore">
+                  <Check className="w-3.5 h-3.5 text-slate-400" />
+                </span>
               )}
             </span>
           )}

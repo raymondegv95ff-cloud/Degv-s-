@@ -83,21 +83,34 @@ export interface PollData {
 export interface Message {
   id: string;
   roomId: string;
+  conversationId?: string;
   senderId: string;
   senderName: string;
   senderAvatar?: string;
+  recipientId?: string;
+  receiverId?: string;
+  participants?: string[];
   content: string;
+  text?: string;
   type: "text" | "image" | "audio" | "video" | "file" | "poll" | "ai_image" | "sticker";
   mediaUrl?: string;
   mediaName?: string;
   mediaSize?: string;
+  attachment?: {
+    url: string;
+    name?: string;
+    mimeType?: string;
+    size?: number;
+  };
   audioDuration?: number; // in seconds
   audioTranscript?: string;
   poll?: PollData;
   createdAt: string;
   timestamp?: number;
+  firestoreTimestamp?: any;
   isRead: boolean;
   readBy?: string[]; // user IDs who read it
+  replyTo?: string | null;
   replyToMessageId?: string;
   replyToSnippet?: {
     id?: string;
@@ -109,7 +122,9 @@ export interface Message {
   isEphemerous?: boolean;
   reactions?: Reaction[];
   translatedText?: string;
-  status?: "sending" | "sent" | "delivered" | "read" | "queued";
+  status?: "pending" | "sending" | "sent" | "delivered" | "read" | "failed" | "queued";
+  clientMessageId?: string;
+  updatedAt?: any;
 }
 
 export interface Room {

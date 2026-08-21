@@ -6,6 +6,13 @@ import { notificationService } from "./services/notificationService";
 import { indexedDbQueueService } from "./services/indexedDbQueueService";
 import { websocketService } from "./services/websocketService";
 import {
+  sendMessage as unifiedSendMessage,
+  createClientMessageId,
+  getPrivateConversationId,
+  flushMessageQueue,
+  listenForConversationMessages,
+} from "./services/messengerService";
+import {
   db,
   sendMessage as sendFirestoreMessage,
   listenForMessages,
@@ -573,22 +580,17 @@ export const App: React.FC = () => {
 
   const handleAutoSyncQueue = async () => {
     setIsSyncingQueue(true);
-    const result = await indexedDbQueueService.syncQueue(async (item) => {
-      const updatedMsg: Message = { ...item.message, status: "sent" };
-      setMessagesMap((prev) => {
-        const roomList = prev[item.roomId] || [];
-        const nextList = roomList.map((m) => (m.id === item.messageId ? updatedMsg : m));
-        storageService.saveRoomMessages(item.roomId, nextList);
-        return { ...prev, [item.roomId]: nextList };
-      });
-      return true;
-    });
-
-    setIsSyncingQueue(false);
-    if (result.syncedCount > 0) {
-      if (!soundMuted) soundService.playReceiveSound();
-      setSyncToastMessage(`¡Conexión restablecida! ${result.syncedCount} mensajes sincronizados desde IndexedDB.`);
-      setTimeout(() => setSyncToastMessage(null), 4000);
+    try {
+      const result = await flushMessageQueue();
+      if (result.synced > 0) {
+        if (!soundMuted) soundService.playReceiveSound();
+        setSyncToastMessage(`¡Conexión restablecida! ${result.synced} mensajes sincronizados con Firestore.`);
+        setTimeout(() => setSyncToastMessage(null), 4000);
+      }
+    } catch (err) {
+      console.warn("[App] Error during automatic queue synchronization:", err);
+    } finally {
+      setIsSyncingQueue(false);
     }
   };
 
@@ -912,7 +914,7 @@ export const App: React.FC = () => {
     return analysis.suggestions;
   };
 
-  // Send Message Handler
+  // Send Message Handler via Centralized Messenger Service
   const handleSendMessage = async (
     content: string,
     type: "text" | "image" | "audio" | "file" | "sticker" = "text",
@@ -921,19 +923,51 @@ export const App: React.FC = () => {
     if (!activeChatId || !currentUser) return;
 
     const isCurrentlyOnline = indexedDbQueueService.isOnline();
+    const clientMessageId = createClientMessageId();
 
-    const newMsg: Message = {
+    // Determine target recipient and participants list
+    let targetRecipientId: string | undefined = undefined;
+    let participants: string[] = [currentUser.id];
+
+    if (activeRoom?.participants && activeRoom.participants.length > 0) {
+      participants = activeRoom.participants.map((p) => (typeof p === "string" ? p : p?.id)).filter(Boolean);
+      for (const pId of participants) {
+        if (pId !== currentUser.id) {
+          targetRecipientId = pId;
+          break;
+        }
+      }
+    }
+
+    if (activeChatId.startsWith("dm_")) {
+      const parts = activeChatId.replace(/^dm_/, "").split("_");
+      const found = parts.find((p) => p && p !== currentUser.id);
+      if (found) targetRecipientId = found;
+      participants = [currentUser.id, targetRecipientId || ""].filter(Boolean);
+    }
+
+    const optimisticMessage: Message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       roomId: activeChatId,
+      conversationId: activeChatId,
       senderId: currentUser.id,
-      senderName: `${currentUser.firstName} ${currentUser.lastName}`,
+      senderName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+      senderAvatar: currentUser.avatarUrl,
+      recipientId: targetRecipientId,
+      receiverId: targetRecipientId,
+      participants,
       type: type as any,
       content,
+      text: content,
       mediaUrl,
+      attachment: mediaUrl ? { url: mediaUrl } : undefined,
       createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       timestamp: Date.now(),
       isRead: true,
-      status: isCurrentlyOnline ? "sent" : "queued",
+      status: isCurrentlyOnline ? "sending" : "pending",
+      clientMessageId,
+      replyTo: replyToMessage?.id || null,
+      replyToMessageId: replyToMessage?.id,
       replyToSnippet: replyToMessage
         ? {
             id: replyToMessage.id,
@@ -943,72 +977,87 @@ export const App: React.FC = () => {
         : undefined,
     };
 
-    console.log(`[App Chat] 📝 [handleSendMessage: Local State Created]`, {
-      messageId: newMsg.id,
-      roomId: activeChatId,
+    console.log(`[Messenger][SEND] 📝 [App.tsx] Initiating sendMessage dispatch:`, {
+      messageId: optimisticMessage.id,
+      clientMessageId,
+      conversationId: activeChatId,
       senderId: currentUser.id,
-      senderName: newMsg.senderName,
-      type: newMsg.type,
-      hasMedia: !!mediaUrl,
+      recipientId: targetRecipientId,
+      type,
       isOnline: isCurrentlyOnline,
-      hasReplySnippet: !!newMsg.replyToSnippet,
     });
 
-    // If online, dispatch message to Firebase Firestore in real-time
-    if (isCurrentlyOnline && activeRoom) {
-      let targetReceiverId = "usr_all";
-      if (activeRoom.participants && activeRoom.participants.length > 0) {
-        for (const p of activeRoom.participants) {
-          const pId = typeof p === "string" ? p : p?.id;
-          if (pId && pId !== currentUser.id) {
-            targetReceiverId = pId;
-            break;
-          }
-        }
-      }
-      if (targetReceiverId === "usr_all" && activeChatId.startsWith("dm_")) {
-        const parts = activeChatId.replace(/^dm_/, "").split("_");
-        const found = parts.find((p) => p && p !== currentUser.id);
-        if (found) targetReceiverId = found;
-      }
+    // Play send audio sound
+    if (!soundMuted) soundService.playSendSound();
 
-      console.log(`[handleSendMessage] 🚀 Full message payload before Firebase write:`, {
-        roomId: activeChatId,
+    // Clear reply snippet
+    setReplyToMessage(null);
+
+    // Save optimistic message locally
+    const initialUpdatedMessages = [...(messagesMap[activeChatId] || []), optimisticMessage];
+    setMessagesMap((prev) => ({ ...prev, [activeChatId]: initialUpdatedMessages }));
+    storageService.saveMessage(activeChatId, optimisticMessage);
+
+    // Update Room preview
+    const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const updatedLastMsg =
+      type === "image"
+        ? "📷 Imagen"
+        : type === "sticker"
+        ? "⭐ Sticker"
+        : type === "audio"
+        ? "🎵 Nota de voz"
+        : content;
+
+    const updatedRoom: Room = {
+      ...activeRoom,
+      lastMessage: updatedLastMsg,
+      lastMessageTime: nowTime,
+      draftText: "",
+    };
+
+    setRooms((prev) => prev.map((r) => (r.id === activeChatId ? updatedRoom : r)));
+    storageService.saveRoom(updatedRoom);
+    saveRoomToFirestore(updatedRoom);
+
+    // Dispatch through unifiedSendMessage
+    try {
+      const sendResult = await unifiedSendMessage({
         senderId: currentUser.id,
-        targetReceiverId,
-        type: newMsg.type,
-        payload: newMsg,
-        json: JSON.stringify(newMsg, null, 2),
+        senderName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+        senderAvatar: currentUser.avatarUrl,
+        recipientId: targetRecipientId,
+        participants,
+        conversationId: activeChatId,
+        type: type as any,
+        text: content,
+        content,
+        mediaUrl,
+        attachment: mediaUrl ? { url: mediaUrl } : undefined,
+        replyTo: replyToMessage?.id || null,
+        replyToSnippet: optimisticMessage.replyToSnippet,
+        clientMessageId,
+        customId: optimisticMessage.id,
       });
 
-      sendFirestoreMessage(currentUser.id, targetReceiverId, content, {
-        id: newMsg.id,
-        roomId: activeChatId,
-        senderName: `${currentUser.firstName || "Yo"} ${currentUser.lastName || ""}`.trim(),
-        senderAvatar: currentUser.avatarUrl,
-        type: newMsg.type,
-        mediaUrl: newMsg.mediaUrl,
-        poll: newMsg.poll,
-      })
-        .then((docId) => {
-          console.log(`[App Chat] ✅ [handleSendMessage: Document Created in Firestore] docId: ${docId}, messageId: ${newMsg.id}`);
-        })
-        .catch((err) => {
-          console.error(`[App Chat] ❌ [handleSendMessage: Network/Permissions Error] Fallo al entregar mensaje a Firestore:`, {
-            error: err.message || err,
-            code: err.code,
-            roomId: activeChatId,
-            senderId: currentUser.id,
-          });
+      // Update message status upon confirmation
+      if (sendResult.success) {
+        setMessagesMap((prev) => {
+          const currentList = prev[activeChatId] || [];
+          const updated = currentList.map((m) =>
+            m.clientMessageId === clientMessageId || m.id === optimisticMessage.id
+              ? { ...m, id: sendResult.messageId, status: "sent" as const }
+              : m
+          );
+          storageService.saveRoomMessages(activeChatId, updated);
+          return { ...prev, [activeChatId]: updated };
         });
+      }
+    } catch (err: any) {
+      console.warn("[App] Error in handleSendMessage dispatch:", err);
     }
 
-    // If offline, save in IndexedDB queue
-    if (!isCurrentlyOnline) {
-      indexedDbQueueService.enqueueMessage(activeChatId, newMsg);
-    }
-
-    // Record stats for Recharts
+    // Record stats for analytics
     try {
       const todayKey = new Date().toISOString().split("T")[0];
       const raw = localStorage.getItem("degvs_messenger_daily_stats") || "{}";
@@ -1018,37 +1067,9 @@ export const App: React.FC = () => {
       localStorage.setItem("degvs_messenger_daily_stats", JSON.stringify(statsObj));
     } catch {}
 
-    // Play send audio sound
-    if (!soundMuted) soundService.playSendSound();
-
-    // Clear reply snippet
-    setReplyToMessage(null);
-
-    // Save message locally
-    const updatedMessages = [...(messagesMap[activeChatId] || []), newMsg];
-    setMessagesMap((prev) => ({ ...prev, [activeChatId]: updatedMessages }));
-    storageService.saveMessage(activeChatId, newMsg);
-
-    // Update Room last message info
-    const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const updatedLastMsg = type === "image" ? "📷 Imagen" : type === "sticker" ? "⭐ Sticker" : type === "audio" ? "🎵 Nota de voz" : content;
-
-    const updatedRoom: Room = {
-      ...activeRoom,
-      lastMessage: updatedLastMsg,
-      lastMessageTime: nowTime,
-      draftText: "",
-    };
-
-    setRooms((prev) =>
-      prev.map((r) => (r.id === activeChatId ? updatedRoom : r))
-    );
-    storageService.saveRoom(updatedRoom);
-    saveRoomToFirestore(updatedRoom);
-
     // Only handle AI response if the user is explicitly in the dedicated Degv's AI chat or typing /imagine
     if (isCurrentlyOnline && (activeRoom?.isAiChat || content.startsWith("/imagine"))) {
-      handleAiResponse(activeChatId, content, updatedMessages);
+      handleAiResponse(activeChatId, content, initialUpdatedMessages);
     }
   };
 

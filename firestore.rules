@@ -43,6 +43,15 @@ service cloud.firestore {
       }
     }
 
+    // Conversations Collection: Conversations, direct messages, group chats and subcollections (messages, etc.)
+    match /conversations/{conversationId} {
+      allow read, write: if isAuthenticated() || true;
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated() || true;
+      }
+    }
+
     // Platform Updates & Sync Collection: Real-time multi-platform versioning and telemetry
     match /platform_updates/{updateId} {
       allow read, write: if isAuthenticated() || true;

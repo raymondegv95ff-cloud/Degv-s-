@@ -30,6 +30,11 @@ import {
 } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
 import { Message, Room, UserProfile, Reaction } from "../types";
+import {
+  sendMessage as unifiedSendMessage,
+  listenForConversationMessages,
+  normalizeMessage,
+} from "./messengerService";
 
 // 1. Initialize Firebase App instance
 export const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -678,7 +683,7 @@ export function listenForFirestoreUsers(onUsersUpdate: (users: UserProfile[]) =>
 }
 
 /**
- * 1. Enviar mensaje a Firestore en tiempo real garantizando destino correcto
+ * 1. Enviar mensaje centralizado mediante Messenger Service
  */
 export async function sendMessage(
   senderId: string,
@@ -686,83 +691,35 @@ export async function sendMessage(
   text: string,
   extraData: Partial<Message> = {}
 ): Promise<string> {
-  const roomId = extraData.roomId || getDirectChatRoomId(senderId, receiverId);
-  const startTime = Date.now();
-  console.log(`[Firestore Realtime] 📤 [sendMessage Flow: Step 1] Preparando payload para Firestore:`, {
+  const conversationId = extraData.conversationId || extraData.roomId || getDirectChatRoomId(senderId, receiverId);
+  const participants = extraData.participants || [senderId, receiverId];
+
+  const result = await unifiedSendMessage({
     senderId,
-    receiverId,
-    roomId,
+    senderName: extraData.senderName,
+    senderAvatar: extraData.senderAvatar,
+    recipientId: receiverId,
+    participants,
+    conversationId,
     type: extraData.type || "text",
-    contentLength: text?.length || 0,
-    textSnippet: text ? text.substring(0, 50) : "",
-    hasMedia: !!extraData.mediaUrl,
-    timestamp: startTime,
+    text,
+    content: text,
+    attachment: extraData.attachment,
+    mediaUrl: extraData.mediaUrl,
+    audioDuration: extraData.audioDuration,
+    audioTranscript: extraData.audioTranscript,
+    poll: extraData.poll,
+    replyTo: extraData.replyTo,
+    replyToSnippet: extraData.replyToSnippet,
+    clientMessageId: extraData.clientMessageId,
+    customId: extraData.id,
   });
 
-  try {
-    const messagesCollection = collection(db, "messages");
-
-    const messageData = {
-      senderId,
-      receiverId,
-      recipientId: receiverId, // Dual-key compatibility for strict routing
-      text,
-      content: text,
-      roomId,
-      senderName: extraData.senderName || "Usuario",
-      senderAvatar: extraData.senderAvatar || "",
-      type: extraData.type || "text",
-      mediaUrl: extraData.mediaUrl || null,
-      poll: extraData.poll || null,
-      isRead: false,
-      createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      timestamp: Date.now(),
-      firestoreTimestamp: serverTimestamp(),
-      reactions: extraData.reactions || [],
-      ...extraData,
-    };
-
-    console.log(`[Firestore Realtime] 🚀 [sendMessage Flow: Step 2] Ejecutando addDoc en colección 'messages'...`);
-    console.log(`[Firestore Realtime] 📦 [sendMessage Full Payload before Firestore write]:`, JSON.stringify(messageData, null, 2));
-    const docRef = await addDoc(messagesCollection, messageData);
-    const duration = Date.now() - startTime;
-    console.log(`[Firestore Realtime] ✅ [sendMessage Flow: Step 3] Mensaje creado con éxito en Firestore. Document ID: '${docRef.id}' (${duration}ms)`);
-
-    // Update or create room in Firestore for persistent real-time rooms
-    const roomRef = doc(db, "rooms", roomId);
-    const chatsRoomRef = doc(db, "chats_rooms", roomId);
-    const roomPayload = {
-      id: roomId,
-      lastMessage: text || (extraData.type === "image" ? "📷 Imagen" : extraData.type === "audio" ? "🎤 Nota de voz" : "Nuevo mensaje"),
-      lastMessageTime: messageData.createdAt,
-      timestamp: Date.now(),
-      updatedAt: serverTimestamp(),
-      participants: [senderId, receiverId],
-    };
-
-    console.log(`[Firestore Realtime] 🔄 [sendMessage Flow: Step 4] Actualizando metadatos de sala en 'rooms' y 'chats_rooms'...`);
-    await Promise.allSettled([
-      setDoc(roomRef, roomPayload, { merge: true }),
-      setDoc(chatsRoomRef, roomPayload, { merge: true }),
-    ]);
-
-    console.log(`[Firestore Realtime] ✨ [sendMessage Flow: Complete] Sala '${roomId}' sincronizada`);
-    return docRef.id;
-  } catch (error: any) {
-    console.error("[Firestore Realtime] ❌ [sendMessage Flow: Failed] Error de red o permisos al enviar mensaje:", {
-      errorMsg: error.message || error,
-      errorCode: error.code,
-      roomId,
-      senderId,
-      receiverId,
-    });
-    throw error;
-  }
+  return result.messageId;
 }
 
 /**
  * 2. Escuchar los mensajes entrantes en tiempo real para el usuario actual
- * Diferencia estrictamente entre senderId y recipientId/receiverId para evitar ecos/reflejos
  */
 export function listenForMessages(
   currentUserId: string,
@@ -781,33 +738,17 @@ export function listenForMessages(
           if (change.type === "added") {
             const data = change.doc.data();
             
-            // Diferenciación estricta: NO reflejar mensajes enviados por el propio usuario
             if (data.senderId === currentUserId) {
               return;
             }
 
-            // Validación explícita de destinatario (recipientId / receiverId)
             const targetRecipient = data.recipientId || data.receiverId;
             const isExplicitRecipient = targetRecipient === currentUserId || targetRecipient === "usr_all";
             if (!isExplicitRecipient) {
               return;
             }
 
-            const messageObj: Message = {
-              id: change.doc.id,
-              roomId: data.roomId || getDirectChatRoomId(data.senderId, currentUserId),
-              senderId: data.senderId,
-              senderName: data.senderName || "Usuario",
-              senderAvatar: data.senderAvatar,
-              content: data.text || data.content || "",
-              type: data.type || "text",
-              mediaUrl: data.mediaUrl,
-              poll: data.poll,
-              createdAt: data.createdAt || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-              timestamp: data.timestamp || Date.now(),
-              isRead: !!data.isRead,
-              reactions: data.reactions || [],
-            };
+            const messageObj = normalizeMessage({ id: change.doc.id, ...data }, data.roomId);
             onNewMessage(messageObj);
           }
         });
@@ -829,61 +770,7 @@ export function listenForRoomMessages(
   roomId: string,
   onMessagesUpdate: (messages: Message[]) => void
 ): Unsubscribe {
-  console.log(`[Firestore Realtime] 👂 [listenForRoomMessages] Configurando listener onSnapshot para sala '${roomId}'...`);
-  try {
-    const q = query(
-      collection(db, "messages"),
-      where("roomId", "==", roomId)
-    );
-
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const changes = snapshot.docChanges();
-        console.log(`[Firestore Realtime] 📥 [onSnapshot Event] Sala '${roomId}': ${snapshot.docs.length} documentos totales, ${changes.length} cambios en este lote.`);
-
-        const rawDocsPayload = snapshot.docs.map((docSnap) => ({
-          id: docSnap.id,
-          ...docSnap.data(),
-        }));
-        console.log(`[Firestore Realtime] 📦 [onSnapshot Full Payload Received for Room '${roomId}'] (${rawDocsPayload.length} items):`, rawDocsPayload);
-
-        changes.forEach((ch) => {
-          const d = ch.doc.data();
-          console.log(`[Firestore Realtime] 📄 [Doc Change: ${ch.type.toUpperCase()}] ID: ${ch.doc.id} | Sender: ${d.senderId} | Texto: "${(d.text || d.content || "").substring(0, 30)}"`);
-        });
-
-        const msgs: Message[] = snapshot.docs
-          .map((docSnap) => {
-            const data = docSnap.data();
-            return {
-              id: docSnap.id,
-              roomId: data.roomId || roomId,
-              senderId: data.senderId,
-              senderName: data.senderName || "Usuario",
-              senderAvatar: data.senderAvatar,
-              content: data.text || data.content || "",
-              type: data.type || "text",
-              mediaUrl: data.mediaUrl,
-              poll: data.poll,
-              createdAt: data.createdAt || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-              timestamp: data.timestamp || Date.now(),
-              isRead: !!data.isRead,
-              reactions: data.reactions || [],
-            };
-          })
-          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
-        onMessagesUpdate(msgs);
-      },
-      (error) => {
-        console.error(`[Firestore Realtime] ❌ [onSnapshot Error] Error al escuchar mensajes en sala '${roomId}':`, error);
-      }
-    );
-  } catch (err) {
-    console.error(`[Firestore Realtime] ❌ [listenForRoomMessages] Excepción configurando query para sala '${roomId}':`, err);
-    return () => {};
-  }
+  return listenForConversationMessages(roomId, onMessagesUpdate);
 }
 
 /**
@@ -1038,3 +925,7 @@ export function getFirebaseDatabaseInfo() {
     currentUser: auth.currentUser ? { uid: auth.currentUser.uid, email: auth.currentUser.email } : null,
   };
 }
+
+// Exportación del módulo de mensajería unificada (Messenger API)
+export * from "./messengerService";
+
