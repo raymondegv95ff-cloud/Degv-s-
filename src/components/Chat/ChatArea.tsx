@@ -178,8 +178,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     };
   }, [activeRoom?.id]);
 
-  // Real-time Firestore messages stream (with initial fallback if provided)
-  const effectiveMessages = realtimeMessages !== null ? realtimeMessages : (messages || []);
+  // Real-time Firestore messages stream seamlessly merged with local state (no manual refresh needed)
+  const effectiveMessages = React.useMemo(() => {
+    const propMsgs = messages || [];
+    if (!realtimeMessages) return propMsgs;
+    const msgMap = new Map<string, Message>();
+    propMsgs.forEach((m) => msgMap.set(m.id, m));
+    realtimeMessages.forEach((m) => msgMap.set(m.id, m));
+    return Array.from(msgMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  }, [realtimeMessages, messages]);
+
   const effectiveRoom = firestoreRoom || activeRoom;
 
   // If no chat selected, display clean welcome neutral state!

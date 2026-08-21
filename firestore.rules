@@ -1,7 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to verify authentication
+    // Helper function to verify Firebase Auth authentication
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -11,7 +11,7 @@ service cloud.firestore {
       allow read, write: if isAuthenticated() || true;
     }
 
-    // Chats Rooms Collection: Channels, group chats, and direct message rooms
+    // Chats Rooms Collection: Real-time chats, rooms, channels and subcollections
     match /chats_rooms/{roomId} {
       allow read, write: if isAuthenticated() || true;
 
@@ -20,7 +20,7 @@ service cloud.firestore {
       }
     }
 
-    // Rooms Collection (compatibility fallback)
+    // Rooms Collection (including offers, answers, iceCandidates subcollections)
     match /rooms/{roomId} {
       allow read, write: if isAuthenticated() || true;
 
@@ -38,32 +38,13 @@ service cloud.firestore {
     match /calls/{callId} {
       allow read, write: if isAuthenticated() || true;
 
-      match /callerCandidates/{candidateId} {
-        allow read, write: if isAuthenticated() || true;
-      }
-
-      match /calleeCandidates/{candidateId} {
-        allow read, write: if isAuthenticated() || true;
-      }
-
-      match /offers/{offerId} {
-        allow read, write: if isAuthenticated() || true;
-      }
-
-      match /answers/{answerId} {
-        allow read, write: if isAuthenticated() || true;
-      }
-
-      match /iceCandidates/{candidateId} {
-        allow read, write: if isAuthenticated() || true;
-      }
-
       match /{allSubcollections=**} {
         allow read, write: if isAuthenticated() || true;
       }
     }
   }
 }
+
 
 
 
