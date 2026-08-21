@@ -972,14 +972,14 @@ export const App: React.FC = () => {
         if (found) targetReceiverId = found;
       }
 
-      console.log(`[App Chat] 🌐 [handleSendMessage: Dispatching to Firestore]`, {
+      console.log(`[handleSendMessage] 🚀 Full message payload before Firebase write:`, {
         roomId: activeChatId,
         senderId: currentUser.id,
         targetReceiverId,
         type: newMsg.type,
-        snippet: content ? content.substring(0, 40) : "",
+        payload: newMsg,
+        json: JSON.stringify(newMsg, null, 2),
       });
-      console.log(`[App Chat] 📦 [handleSendMessage: Full Outgoing Message Payload]:`, JSON.stringify(newMsg, null, 2));
 
       sendFirestoreMessage(currentUser.id, targetReceiverId, content, {
         id: newMsg.id,

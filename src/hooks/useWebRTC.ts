@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { webrtcService, CallSession } from "../services/webrtcService";
 import { UserProfile } from "../types";
 import { soundService } from "../services/soundService";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc } from "firebase/firestore";
 import { db } from "../services/firebase";
 
 export interface WebRTCState {
@@ -30,7 +30,7 @@ export function useWebRTC(currentUser: UserProfile | null) {
 
   const durationTimerRef = useRef<any>(null);
 
-  // 1. Escuchar llamadas entrantes dirigidas al usuario actual mediante Firestore onSnapshot
+  // 1. Escuchar llamadas entrantes dirigidas al usuario actual mediante Firestore onSnapshot (Sin WebSockets)
   useEffect(() => {
     if (!currentUser?.id) return;
 
@@ -95,36 +95,91 @@ export function useWebRTC(currentUser: UserProfile | null) {
     };
   }, []);
 
-  // 3. Listener auxiliar de subcolección 'offers' en sala activa (Firestore onSnapshot)
+  // 3. Listeners reactivos Firestore onSnapshot para 'offers', 'answers' e 'iceCandidates'
   useEffect(() => {
-    if (!activeCall?.roomId) return;
+    if (!activeCall?.id) return;
+    const callId = activeCall.id;
     const roomId = activeCall.roomId;
-    console.log(`[useWebRTC: Firestore Signaling] 👂 [Room Subcollection Listener] Monitoreando subcolección 'rooms/${roomId}/offers'...`);
 
-    const offersQuery = query(
-      collection(db, "rooms", roomId, "offers"),
-      where("timestamp", ">=", activeCall.createdAt - 5000)
-    );
+    console.log(`[useWebRTC: Firestore Signaling] 👂 [Signaling Listeners Active] Monitoreando onSnapshot en 'calls/${callId}' y subcolecciones...`);
 
-    const unsubRoomOffers = onSnapshot(offersQuery, (snapshot) => {
+    // 3a. Listener onSnapshot para 'offers'
+    const unsubOffers = onSnapshot(collection(db, "calls", callId, "offers"), (snapshot) => {
       snapshot.docChanges().forEach((change) => {
         if (change.type === "added") {
           const offerData = change.doc.data();
-          console.log(`[useWebRTC: Firestore Signaling] 📥 [Room Subcollection: Offer Detected] en room '${roomId}':`, {
+          console.log(`[useWebRTC: Firestore Signaling] 📥 [Offers onSnapshot] Oferta SDP detectada en 'calls/${callId}/offers':`, {
             docId: change.doc.id,
             callerId: offerData.callerId,
             type: offerData.type,
+            timestamp: offerData.timestamp,
           });
         }
       });
     }, (err) => {
-      console.warn(`[useWebRTC: Firestore Signaling] Aviso en listener de subcolección de sala:`, err.message);
+      console.warn(`[useWebRTC: Firestore Signaling] Notice en listener de offers:`, err.message);
     });
 
+    // 3b. Listener onSnapshot para 'answers'
+    const unsubAnswers = onSnapshot(collection(db, "calls", callId, "answers"), (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const answerData = change.doc.data();
+          console.log(`[useWebRTC: Firestore Signaling] 📥 [Answers onSnapshot] Respuesta SDP detectada en 'calls/${callId}/answers':`, {
+            docId: change.doc.id,
+            calleeId: answerData.calleeId,
+            type: answerData.type,
+            timestamp: answerData.timestamp,
+          });
+        }
+      });
+    }, (err) => {
+      console.warn(`[useWebRTC: Firestore Signaling] Notice en listener de answers:`, err.message);
+    });
+
+    // 3c. Listener onSnapshot para 'iceCandidates' (Caller & Callee candidates)
+    const unsubCandidates = onSnapshot(collection(db, "calls", callId, "iceCandidates"), (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const cand = change.doc.data();
+          console.log(`[useWebRTC: Firestore Signaling] ❄️ [ICE Candidates onSnapshot] Candidato ICE detectado en 'calls/${callId}/iceCandidates':`, {
+            docId: change.doc.id,
+            senderId: cand.senderId,
+            role: cand.role,
+            sdpMid: cand.sdpMid,
+            sdpMLineIndex: cand.sdpMLineIndex,
+            candidate: cand.candidate ? cand.candidate.substring(0, 35) + "..." : "null",
+          });
+        }
+      });
+    }, (err) => {
+      console.warn(`[useWebRTC: Firestore Signaling] Notice en listener de iceCandidates:`, err.message);
+    });
+
+    // 3d. Listener opcional en subcolección de sala si existe roomId
+    let unsubRoomCandidates = () => {};
+    if (roomId) {
+      unsubRoomCandidates = onSnapshot(collection(db, "rooms", roomId, "iceCandidates"), (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            const cand = change.doc.data();
+            console.log(`[useWebRTC: Firestore Signaling] ❄️ [Room ICE Candidates] Candidato en 'rooms/${roomId}/iceCandidates':`, {
+              senderId: cand.senderId,
+              role: cand.role,
+            });
+          }
+        });
+      }, () => {});
+    }
+
     return () => {
-      unsubRoomOffers();
+      console.log(`[useWebRTC: Firestore Signaling] 🔌 [Signaling Listeners Teardown] Desuscribiendo listeners de 'calls/${callId}'`);
+      unsubOffers();
+      unsubAnswers();
+      unsubCandidates();
+      unsubRoomCandidates();
     };
-  }, [activeCall?.roomId, activeCall?.createdAt]);
+  }, [activeCall?.id, activeCall?.roomId]);
 
   // 4. Contador de duración de llamada activa
   useEffect(() => {
