@@ -409,9 +409,11 @@ export async function sendMessage(params: SendMessageParams): Promise<{
     hasMedia: !!(mediaUrl || attachment),
   });
 
-  // OFFLINE HANDLING: Enqueue in IndexedDB and return pending message
-  if (!isOnline) {
-    console.log(`[Messenger][QUEUE] 💾 Device is offline. Persisting [${clientMessageId}] into IndexedDB queue.`);
+  // OFFLINE OR QUOTA EXHAUSTED HANDLING: Enqueue in IndexedDB and return pending message
+  if (!isOnline || indexedDbQueueService.isQuotaExhausted()) {
+    console.log(
+      `[Messenger][QUEUE] 💾 Device is ${!isOnline ? "offline" : "in quota-limited mode"}. Persisting [${clientMessageId}] into IndexedDB queue.`
+    );
     await indexedDbQueueService.enqueueMessage(conversationId, outgoingMessage);
     return {
       success: false,
@@ -426,31 +428,7 @@ export async function sendMessage(params: SendMessageParams): Promise<{
   try {
     console.log(`[Messenger][FIRESTORE] 🚀 Executing idempotent write to Firestore: ${conversationId}/messages/${messageId}`);
 
-    // Idempotency check: see if clientMessageId already exists in this conversation
-    const messagesCol = collection(db, "conversations", conversationId, "messages");
-    const idempotencyQuery = query(messagesCol, where("clientMessageId", "==", clientMessageId));
-    const existingSnap = await getDocs(idempotencyQuery);
-
-    if (!existingSnap.empty) {
-      const existingDoc = existingSnap.docs[0];
-      console.log(`[Messenger][FIRESTORE] 🔁 Idempotent message found! Doc ID: ${existingDoc.id}. Updating status without duplicating.`);
-      await updateDoc(existingDoc.ref, {
-        status: "sent",
-        updatedAt: serverTimestamp(),
-      });
-      return {
-        success: true,
-        messageId: existingDoc.id,
-        clientMessageId,
-        message: {
-          ...outgoingMessage,
-          id: existingDoc.id,
-          status: "sent",
-        },
-      };
-    }
-
-    // Atomic document creation in conversations/{conversationId}/messages
+    // Atomic document creation in primary conversation path: conversations/{conversationId}/messages/{messageId}
     const firestorePayload = {
       id: messageId,
       clientMessageId,
@@ -480,36 +458,11 @@ export async function sendMessage(params: SendMessageParams): Promise<{
       reactions: [],
     };
 
-    // Dual-write support: write to `conversations/.../messages` AND update legacy `messages` + `rooms` metadata
-    const legacyMsgRef = doc(db, "messages", messageId);
-    const roomRef = doc(db, "rooms", conversationId);
-    const chatsRoomRef = doc(db, "chats_rooms", conversationId);
+    console.log(`[sendMessage] 🚀 [sendMessage: Firebase Write] Full payload object right before Firebase write operation:`, firestorePayload);
+    console.log(`[sendMessage] 📦 [sendMessage: Payload JSON String]:\n`, JSON.stringify(firestorePayload, null, 2));
 
-    const previewText =
-      type === "image"
-        ? "📷 Imagen"
-        : type === "audio"
-        ? "🎤 Nota de voz"
-        : type === "sticker"
-        ? "⭐ Sticker"
-        : type === "file"
-        ? "📁 Archivo"
-        : resolvedText || "Nuevo mensaje";
-
-    const roomPayload = {
-      id: conversationId,
-      lastMessage: previewText,
-      lastMessageTime: outgoingMessage.createdAt,
-      updatedAt: serverTimestamp(),
-      participants: outgoingMessage.participants,
-    };
-
-    await Promise.allSettled([
-      setDoc(messageDocRef, firestorePayload, { merge: true }),
-      setDoc(legacyMsgRef, firestorePayload, { merge: true }),
-      setDoc(roomRef, roomPayload, { merge: true }),
-      setDoc(chatsRoomRef, roomPayload, { merge: true }),
-    ]);
+    // Single atomic write to conserve Firestore daily quota
+    await setDoc(messageDocRef, firestorePayload, { merge: true });
 
     console.log(`[Messenger][FIRESTORE] ✅ Document write confirmed by Firestore: ${messageId}`);
 
@@ -523,7 +476,21 @@ export async function sendMessage(params: SendMessageParams): Promise<{
       },
     };
   } catch (err: any) {
-    console.error(`[Messenger][FIRESTORE] ❌ Network/Firestore error while sending message:`, err);
+    const isQuotaErr =
+      err?.code === "resource-exhausted" ||
+      err?.message?.includes("Quota limit exceeded") ||
+      err?.message?.includes("resource-exhausted");
+
+    const isUnavailable = err?.code === "unavailable" || err?.message?.includes("unavailable");
+
+    if (isQuotaErr) {
+      indexedDbQueueService.markQuotaExhausted(15);
+      console.warn(`[Messenger][FIRESTORE] 🛑 Quota limit reached in Firestore. Seamlessly saving message in IndexedDB.`);
+    } else if (isUnavailable) {
+      console.warn(`[Messenger][FIRESTORE] 🔌 Firestore backend is temporarily unreachable. Saving message in IndexedDB.`);
+    } else {
+      console.error(`[Messenger][FIRESTORE] ❌ Network/Firestore error while sending message:`, err);
+    }
 
     // Fallback: enqueue in IndexedDB on write failure
     await indexedDbQueueService.enqueueMessage(conversationId, outgoingMessage);
@@ -532,7 +499,7 @@ export async function sendMessage(params: SendMessageParams): Promise<{
       success: false,
       messageId,
       clientMessageId,
-      message: { ...outgoingMessage, status: "failed" },
+      message: { ...outgoingMessage, status: "pending" },
       isQueued: true,
     };
   }
@@ -546,15 +513,12 @@ export async function markMessageAsDelivered(
   messageId: string,
   currentUserId: string
 ): Promise<void> {
+  if (!indexedDbQueueService.isOnline() || indexedDbQueueService.isQuotaExhausted()) return;
   try {
     const msgRef = doc(db, "conversations", conversationId, "messages", messageId);
-    const legacyRef = doc(db, "messages", messageId);
-    await Promise.allSettled([
-      updateDoc(msgRef, { status: "delivered", updatedAt: serverTimestamp() }),
-      updateDoc(legacyRef, { status: "delivered", updatedAt: serverTimestamp() }),
-    ]);
-  } catch (e) {
-    console.warn("[Messenger] Notice updating delivered status:", e);
+    await updateDoc(msgRef, { status: "delivered", updatedAt: serverTimestamp() });
+  } catch (e: any) {
+    if (e?.code === "resource-exhausted") indexedDbQueueService.markQuotaExhausted(15);
   }
 }
 
@@ -566,15 +530,12 @@ export async function markMessageAsRead(
   messageId: string,
   currentUserId: string
 ): Promise<void> {
+  if (!indexedDbQueueService.isOnline() || indexedDbQueueService.isQuotaExhausted()) return;
   try {
     const msgRef = doc(db, "conversations", conversationId, "messages", messageId);
-    const legacyRef = doc(db, "messages", messageId);
-    await Promise.allSettled([
-      updateDoc(msgRef, { isRead: true, status: "read", updatedAt: serverTimestamp() }),
-      updateDoc(legacyRef, { isRead: true, status: "read", updatedAt: serverTimestamp() }),
-    ]);
-  } catch (e) {
-    console.warn("[Messenger] Notice updating read status:", e);
+    await updateDoc(msgRef, { isRead: true, status: "read", updatedAt: serverTimestamp() });
+  } catch (e: any) {
+    if (e?.code === "resource-exhausted") indexedDbQueueService.markQuotaExhausted(15);
   }
 }
 
@@ -603,20 +564,33 @@ export function listenForConversationMessages(
       if (m.id) map.set(m.id, m);
     });
     const sorted = Array.from(map.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    console.log(`[listenForRoomMessages: onSnapshot] 📦 [Merged Messages] Full normalized messages array inside listener callback for room '${conversationId}' (${sorted.length} messages):`, sorted);
     callback(sorted);
   };
 
   const unsubPrimary = onSnapshot(
     primaryQuery,
     (snapshot) => {
+      const rawDocs = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
+
+      console.log(`[listenForRoomMessages: onSnapshot] 📥 [Primary Collection: conversations/${conversationId}/messages] Snapshot received from Firestore:`, {
+        conversationId,
+        docsCount: snapshot.docs.length,
+        changesCount: snapshot.docChanges().length,
+        fullDocsPayload: rawDocs,
+      });
+      console.log(`[listenForRoomMessages: onSnapshot] 📦 [Primary Collection Payload JSON]:\n`, JSON.stringify(rawDocs, null, 2));
+
       primaryMsgs = snapshot.docs.map((docSnap) => {
         return normalizeMessage({ id: docSnap.id, ...docSnap.data() }, conversationId);
       });
-      console.log(`[Messenger][LISTENER] 📥 Primary snapshot: ${primaryMsgs.length} messages in '${conversationId}'`);
       emitMerged();
     },
     (error) => {
-      console.warn(`[Messenger][LISTENER] Primary query notice for '${conversationId}':`, error.message);
+      console.warn(`[listenForRoomMessages: onSnapshot] ⚠️ Primary query error notice for '${conversationId}':`, error.message);
     }
   );
 
@@ -627,13 +601,24 @@ export function listenForConversationMessages(
   const unsubLegacy = onSnapshot(
     legacyQuery,
     (snapshot) => {
+      const rawLegacyDocs = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
+
+      console.log(`[listenForRoomMessages: onSnapshot] 📥 [Legacy Collection: messages] Snapshot received from Firestore for room '${conversationId}':`, {
+        roomId: conversationId,
+        docsCount: snapshot.docs.length,
+        fullDocsPayload: rawLegacyDocs,
+      });
+
       legacyMsgs = snapshot.docs.map((docSnap) => {
         return normalizeMessage({ id: docSnap.id, ...docSnap.data() }, conversationId);
       });
       emitMerged();
     },
     (error) => {
-      console.warn(`[Messenger][LISTENER] Legacy query notice for '${conversationId}':`, error.message);
+      console.warn(`[listenForRoomMessages: onSnapshot] ⚠️ Legacy query error notice for '${conversationId}':`, error.message);
     }
   );
 

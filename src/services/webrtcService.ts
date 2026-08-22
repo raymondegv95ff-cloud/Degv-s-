@@ -261,11 +261,7 @@ class WebRTCService {
         };
         addDoc(callerCandidatesCollection, candPayload)
           .then(() => console.log(`[Degv's WebRTC: ICE Signaling] ✅ Candidato ICE caller guardado en 'calls/${callId}/callerCandidates'`))
-          .catch((err) => console.error(`[Degv's WebRTC: ICE Signaling] ❌ Error guardando ICE caller candidate:`, err));
-        addDoc(callIceCandidatesCollection, candPayload).catch(() => {});
-        if (roomId) {
-          addDoc(collection(db, "rooms", roomId, "iceCandidates"), candPayload).catch(() => {});
-        }
+          .catch((err) => console.warn(`[Degv's WebRTC: ICE Signaling] Notice guardando ICE caller candidate:`, err.message || err));
       } else {
         console.log("[Degv's WebRTC: ICE Signaling] 🏁 [Caller onicecandidate] Recolección de candidatos ICE finalizada (null candidate)");
       }
@@ -288,7 +284,7 @@ class WebRTCService {
       timestamp: Date.now(),
     };
 
-    // 4. Crear documento en Firestore 'calls' y subcolección 'offers'
+    // 4. Crear documento en Firestore 'calls'
     const callDocRef = doc(db, "calls", callId);
     const callData: CallSession = {
       id: callId,
@@ -305,11 +301,9 @@ class WebRTCService {
       createdAt: Date.now(),
     };
 
-    await setDoc(callDocRef, callData);
-    await addDoc(collection(db, "calls", callId, "offers"), offerPayload).catch(() => {});
-    if (roomId) {
-      await addDoc(collection(db, "rooms", roomId, "offers"), offerPayload).catch(() => {});
-    }
+    await setDoc(callDocRef, callData).catch((err) => {
+      console.warn("[Degv's WebRTC] Notice guardando callDoc:", err.message || err);
+    });
     console.log("[Degv's WebRTC] 📨 [startCall] Documento de llamada y oferta SDP publicados en Firestore 'calls/'", callId);
 
     // 5. Escuchar respuesta del receptor (Answer) mediante Firestore onSnapshot
@@ -414,11 +408,7 @@ class WebRTCService {
         };
         addDoc(calleeCandidatesCollection, candPayload)
           .then(() => console.log(`[Degv's WebRTC: ICE Signaling] ✅ Candidato ICE callee guardado en 'calls/${callId}/calleeCandidates'`))
-          .catch((err) => console.error(`[Degv's WebRTC: ICE Signaling] ❌ Error guardando ICE callee candidate:`, err));
-        addDoc(callIceCandidatesCollection, candPayload).catch(() => {});
-        if (callData.roomId) {
-          addDoc(collection(db, "rooms", callData.roomId, "iceCandidates"), candPayload).catch(() => {});
-        }
+          .catch((err) => console.warn(`[Degv's WebRTC: ICE Signaling] Notice guardando ICE callee candidate:`, err.message || err));
       } else {
         console.log("[Degv's WebRTC: ICE Signaling] 🏁 [Callee onicecandidate] Recolección de candidatos ICE del receptor finalizada (null candidate)");
       }
@@ -451,16 +441,14 @@ class WebRTCService {
       timestamp: Date.now(),
     };
 
-    // 5. Actualizar documento de llamada y subcolección 'answers' en Firestore
+    // 5. Actualizar documento de llamada en Firestore
     await updateDoc(callDocRef, {
       answer: answerPayload,
       status: "accepted",
       answeredAt: Date.now(),
+    }).catch((err) => {
+      console.warn("[Degv's WebRTC] Notice actualizando answer:", err.message || err);
     });
-    await addDoc(collection(db, "calls", callId, "answers"), answerPayload).catch(() => {});
-    if (callData.roomId) {
-      await addDoc(collection(db, "rooms", callData.roomId, "answers"), answerPayload).catch(() => {});
-    }
     console.log("[Degv's WebRTC] 📤 [answerCall] Respuesta (Answer) enviada y llamada marcada como 'accepted' en Firestore.");
 
     // 6. Escuchar candidatos ICE del llamador (Caller)

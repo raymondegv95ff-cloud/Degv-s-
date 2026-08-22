@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  degvs-messenger-oracle:
+    container_name: degvs-messenger-24h
+    image: node:20-alpine
+    restart: always
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    command: sh -c "npm install --legacy-peer-deps && npm run build && npm run start"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx-oracle-proxy:
+    container_name: degvs-nginx-ssl
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./public:/var/www/degvs/public:ro
+    depends_on:
+      - degvs-messenger-oracle

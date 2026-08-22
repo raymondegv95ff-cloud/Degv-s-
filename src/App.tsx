@@ -74,6 +74,7 @@ import { CreateGroupChannelModal } from "./components/Modals/CreateGroupChannelM
 import { SupportBotModal } from "./components/Modals/SupportBotModal";
 import { StorageCleanerModal } from "./components/Modals/StorageCleanerModal";
 import { PlatformUpdateModal } from "./components/Modals/PlatformUpdateModal";
+import { OracleCloudModal } from "./components/Modals/OracleCloudModal";
 import { SmartReplyService } from "./services/smartReplyService";
 import { platformUpdateService } from "./services/platformUpdateService";
 import { CrossPlatformUpdateState } from "./types";
@@ -119,6 +120,7 @@ export const App: React.FC = () => {
   const [isPublishDeployOpen, setIsPublishDeployOpen] = useState(false);
   const [isGitHubActionsModalOpen, setIsGitHubActionsModalOpen] = useState(false);
   const [isPlatformUpdateOpen, setIsPlatformUpdateOpen] = useState(false);
+  const [isOracleCloudModalOpen, setIsOracleCloudModalOpen] = useState(false);
   const [platformUpdateState, setPlatformUpdateState] = useState<CrossPlatformUpdateState>(() =>
     platformUpdateService.getState()
   );
@@ -157,6 +159,7 @@ export const App: React.FC = () => {
   // Offline Connection Loss Detection & IndexedDB Queue State
   const [isOnline, setIsOnline] = useState<boolean>(() => indexedDbQueueService.isOnline());
   const [queuedOfflineCount, setQueuedOfflineCount] = useState<number>(0);
+  const [isQuotaExhausted, setIsQuotaExhausted] = useState<boolean>(false);
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
 
@@ -455,10 +458,11 @@ export const App: React.FC = () => {
               updatedAt: serverTimestamp(),
             };
 
-            await Promise.allSettled([
-              setDoc(doc(db, "chats_rooms", directRoomId), newRoomPayload, { merge: true }),
-              setDoc(doc(db, "rooms", directRoomId), newRoomPayload, { merge: true }),
-            ]);
+            if (!indexedDbQueueService.isQuotaExhausted()) {
+              await setDoc(doc(db, "rooms", directRoomId), newRoomPayload, { merge: true }).catch((err) => {
+                if (err?.code === "resource-exhausted") indexedDbQueueService.markQuotaExhausted(15);
+              });
+            }
 
             roomObj = {
               id: directRoomId,
@@ -567,10 +571,11 @@ export const App: React.FC = () => {
   };
 
   useEffect(() => {
-    const unsubscribe = indexedDbQueueService.subscribe((onlineStatus, count) => {
+    const unsubscribe = indexedDbQueueService.subscribe((onlineStatus, count, quotaStatus) => {
       setIsOnline(onlineStatus);
       setQueuedOfflineCount(count);
-      if (onlineStatus && count > 0) {
+      setIsQuotaExhausted(quotaStatus);
+      if (onlineStatus && !quotaStatus && count > 0) {
         handleAutoSyncQueue();
       }
     });
@@ -1020,25 +1025,32 @@ export const App: React.FC = () => {
     storageService.saveRoom(updatedRoom);
     saveRoomToFirestore(updatedRoom);
 
+    const sendPayload = {
+      senderId: currentUser.id,
+      senderName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+      senderAvatar: currentUser.avatarUrl,
+      recipientId: targetRecipientId,
+      participants,
+      conversationId: activeChatId,
+      type: type as any,
+      text: content,
+      content,
+      mediaUrl,
+      attachment: mediaUrl ? { url: mediaUrl } : undefined,
+      replyTo: replyToMessage?.id || null,
+      replyToSnippet: optimisticMessage.replyToSnippet,
+      clientMessageId,
+      customId: optimisticMessage.id,
+    };
+
+    console.log(`[handleSendMessage] 🚀 [handleSendMessage: Firebase Write] Full payload object right before Firebase write operation:`, sendPayload);
+    console.log(`[handleSendMessage] 📦 [handleSendMessage: Payload JSON String]:\n`, JSON.stringify(sendPayload, null, 2));
+
     // Dispatch through unifiedSendMessage
     try {
-      const sendResult = await unifiedSendMessage({
-        senderId: currentUser.id,
-        senderName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
-        senderAvatar: currentUser.avatarUrl,
-        recipientId: targetRecipientId,
-        participants,
-        conversationId: activeChatId,
-        type: type as any,
-        text: content,
-        content,
-        mediaUrl,
-        attachment: mediaUrl ? { url: mediaUrl } : undefined,
-        replyTo: replyToMessage?.id || null,
-        replyToSnippet: optimisticMessage.replyToSnippet,
-        clientMessageId,
-        customId: optimisticMessage.id,
-      });
+      const sendResult = await unifiedSendMessage(sendPayload);
+
+      console.log(`[handleSendMessage] ✅ [handleSendMessage: Firebase Write Result] Message sent to Firestore successfully:`, sendResult);
 
       // Update message status upon confirmation
       if (sendResult.success) {
@@ -1054,7 +1066,7 @@ export const App: React.FC = () => {
         });
       }
     } catch (err: any) {
-      console.warn("[App] Error in handleSendMessage dispatch:", err);
+      console.error("[handleSendMessage] ❌ [handleSendMessage: Firebase Write Error] Error dispatching message to Firebase:", err);
     }
 
     // Record stats for analytics
@@ -1462,6 +1474,7 @@ export const App: React.FC = () => {
           onOpenPublishDeploy={() => setIsPublishDeployOpen(true)}
           onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
           onOpenGitHubActions={() => setIsGitHubActionsModalOpen(true)}
+          onOpenOracleCloud={() => setIsOracleCloudModalOpen(true)}
           isUpdateAvailable={platformUpdateState.isUpdateAvailable}
           isOptimizing={platformUpdateState.isUpdating}
           theme={theme}
@@ -1603,19 +1616,24 @@ export const App: React.FC = () => {
         }`}
       >
         {/* Offline Connection Loss Detection & IndexedDB Queue Banner */}
-        {!isOnline && (
+        {(!isOnline || isQuotaExhausted) && (
           <div className="bg-amber-950/90 border-b border-amber-500/40 px-4 py-2 text-amber-200 text-xs font-bold flex items-center justify-between z-30 shadow-lg backdrop-blur-md shrink-0">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
-              <span>Modo Sin Conexión:</span>
+              <span>{!isOnline ? "Modo Sin Conexión:" : "Almacenamiento Local Activo:"}</span>
               <span className="text-[11px] text-amber-300 font-normal">
                 {queuedOfflineCount > 0
-                  ? `${queuedOfflineCount} mensaje(s) guardado(s) en cola local (IndexedDB) esperando reconexión.`
-                  : "Los mensajes enviados se guardarán en IndexedDB y se sincronizarán al reconectar."}
+                  ? `${queuedOfflineCount} mensaje(s) guardado(s) en cola local (IndexedDB).`
+                  : !isOnline
+                  ? "Los mensajes se guardan de forma segura en IndexedDB y se sincronizarán al reconectar."
+                  : "Cuota de nube en pausa. Todos los mensajes se guardan de forma instantánea en tu dispositivo (IndexedDB)."}
               </span>
             </div>
             <button
-              onClick={() => handleAutoSyncQueue()}
+              onClick={() => {
+                if (isQuotaExhausted) indexedDbQueueService.clearQuotaExhausted();
+                handleAutoSyncQueue();
+              }}
               disabled={isSyncingQueue}
               className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black rounded-xl transition shadow active:scale-95 shrink-0"
             >
@@ -1941,6 +1959,7 @@ export const App: React.FC = () => {
         onOpenPublishDeploy={() => setIsPublishDeployOpen(true)}
         onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
         onOpenGitHubActions={() => setIsGitHubActionsModalOpen(true)}
+        onOpenOracleCloud={() => setIsOracleCloudModalOpen(true)}
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onOpenSupportBot={() => setIsSupportBotOpen(true)}
         onOpenStorageCleaner={() => setIsStorageCleanerOpen(true)}
@@ -1950,6 +1969,12 @@ export const App: React.FC = () => {
           setIsSettingsOpen(false);
           setIsAuthModalOpen(true);
         }}
+      />
+
+      {/* Oracle Cloud Always Free 24/7 Integration Modal */}
+      <OracleCloudModal
+        isOpen={isOracleCloudModalOpen}
+        onClose={() => setIsOracleCloudModalOpen(false)}
       />
 
       {/* GitHub Actions CI/CD Synchronization & Diagnostic Modal */}

@@ -351,6 +351,42 @@ export interface OptimizationResult {
   systemDiagnostics?: SystemDiagnostics;
 }
 
+export interface OracleCloudConfig {
+  enabled: boolean;
+  customEndpoint?: string;
+  region: string;
+  architecture: "ampere_arm64" | "amd64";
+  ocpus: number;
+  ramGb: number;
+  dataTransitLimitTb: number;
+  autoRelay24h: boolean;
+  keepAliveHeartbeat: boolean;
+  publicIp?: string;
+}
+
+export interface OracleCloudNodeStatus {
+  status: "online" | "syncing" | "connecting" | "standby" | "error";
+  uptimeSeconds: number;
+  uptimeFormatted: string;
+  uptimePercentage: string;
+  region: string;
+  regionLabel: string;
+  architecture: string;
+  ocpus: number;
+  ramGb: number;
+  storageGb: number;
+  dataTransitUsedGb: number;
+  dataTransitLimitGb: number;
+  latencyMs: number;
+  packetsRelayed: number;
+  activeSockets: number;
+  is24hContinuous: boolean;
+  lastSyncAt: number;
+  sslActive: boolean;
+  publicEndpoint: string;
+  serverVersion: string;
+}
+
 export interface CrossPlatformUpdateState {
   isUpdateAvailable: boolean;
   isUpdating: boolean;

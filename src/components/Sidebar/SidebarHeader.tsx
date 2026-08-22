@@ -14,6 +14,7 @@ import {
   FolderGit2,
   Terminal,
   RefreshCw,
+  Cloud,
 } from "lucide-react";
 
 interface SidebarHeaderProps {
@@ -27,6 +28,7 @@ interface SidebarHeaderProps {
   onOpenPublishDeploy?: () => void;
   onOpenPlatformUpdate?: () => void;
   onOpenGitHubActions?: () => void;
+  onOpenOracleCloud?: () => void;
   isUpdateAvailable?: boolean;
   isOptimizing?: boolean;
   theme: ThemeMode;
@@ -45,6 +47,7 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
   onOpenPublishDeploy,
   onOpenPlatformUpdate,
   onOpenGitHubActions,
+  onOpenOracleCloud,
   isUpdateAvailable = false,
   isOptimizing = false,
   theme,
@@ -95,19 +98,36 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
               </span>
             </div>
             <span className="text-slate-600">•</span>
-            <span
-              className="px-1.5 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 text-[9px] font-extrabold flex items-center gap-1 tracking-tight cursor-default"
-              title="Historial de chats almacenado en caché local para carga instantánea 0ms"
+            <button
+              onClick={onOpenOracleCloud}
+              className="px-1.5 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 hover:border-cyan-400 text-cyan-300 text-[9px] font-extrabold flex items-center gap-1 tracking-tight cursor-pointer transition shadow-[0_0_6px_rgba(0,229,255,0.2)]"
+              title="Oracle Cloud Always Free 24/7 activo. Clic para monitor y optimización de tránsito"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-              <span>Caché 0ms</span>
-            </span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              <span>Oracle 24/7</span>
+            </button>
           </div>
         </div>
       </div>
 
       {/* Header Action Buttons */}
       <div className="flex items-center gap-1.5 text-slate-400">
+        {/* Oracle Cloud Always Free 24/7 Optimizer Button */}
+        {onOpenOracleCloud && (
+          <button
+            onClick={onOpenOracleCloud}
+            title="Oracle Cloud Always Free 24/7 (Tránsito Optimizado)"
+            className="p-1.5 rounded-xl bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 hover:text-white hover:border-cyan-400 transition-colors relative group shadow-[0_0_8px_rgba(0,229,255,0.2)]"
+            id="oracle-cloud-btn"
+          >
+            <Cloud className="w-4 h-4 text-cyan-300" />
+            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-400 animate-pulse border border-[#0a0a0a]" />
+            <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-[#0a0a0a] text-cyan-300 font-bold text-[10px] py-0.5 px-2 rounded opacity-0 group-hover:opacity-100 transition pointer-events-none whitespace-nowrap z-50 border border-cyan-500/40 shadow-lg">
+              Oracle Cloud 24/7
+            </span>
+          </button>
+        )}
+
         {/* Cross-Platform Update & Optimizer Button */}
         {onOpenPlatformUpdate && (
           <button
@@ -189,4 +209,5 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
     </div>
   );
 };
+
 

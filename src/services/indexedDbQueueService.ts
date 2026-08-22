@@ -2,7 +2,7 @@
 import { Message } from "../types";
 
 const DB_NAME = "degvs_messenger_offline_db";
-const DB_VERSION = 2; // Incremented for upgraded schema and clientMessageId indexing
+const DB_VERSION = 2; // Upgraded schema and clientMessageId indexing
 const STORE_NAME = "offline_messages_queue";
 
 export interface QueuedMessageItem {
@@ -33,13 +33,32 @@ export interface QueuedMessageItem {
   status: "pending" | "sending" | "failed";
 }
 
+export type QueueListener = (isOnline: boolean, queuedCount: number, isQuotaExhausted: boolean) => void;
+
 class IndexedDbQueueService {
   private dbPromise: Promise<IDBDatabase> | null = null;
   private isOnlineState: boolean = typeof navigator !== "undefined" ? navigator.onLine : true;
-  private listeners: Set<(isOnline: boolean, queuedCount: number) => void> = new Set();
+  private isQuotaExhaustedState: boolean = false;
+  private quotaExhaustedUntil: number = 0;
+  private listeners: Set<QueueListener> = new Set();
+  public onQuotaPause?: () => void;
+  public onQuotaResume?: () => void;
 
   constructor() {
     if (typeof window !== "undefined") {
+      try {
+        const storedUntil = localStorage.getItem("degvs_firestore_quota_until");
+        if (storedUntil) {
+          const parsed = parseInt(storedUntil, 10);
+          if (!isNaN(parsed) && Date.now() < parsed) {
+            this.isQuotaExhaustedState = true;
+            this.quotaExhaustedUntil = parsed;
+          } else {
+            localStorage.removeItem("degvs_firestore_quota_until");
+          }
+        }
+      } catch {}
+
       this.initNetworkListeners();
       this.initDB().catch((err) => {
         console.warn("[Messenger][QUEUE] IndexedDB initialization notice:", err);
@@ -112,9 +131,48 @@ class IndexedDbQueueService {
     return typeof navigator !== "undefined" ? navigator.onLine && this.isOnlineState : true;
   }
 
-  public subscribe(callback: (isOnline: boolean, queuedCount: number) => void) {
+  public isQuotaExhausted(): boolean {
+    if (this.isQuotaExhaustedState && Date.now() < this.quotaExhaustedUntil) {
+      return true;
+    }
+    if (this.isQuotaExhaustedState && Date.now() >= this.quotaExhaustedUntil) {
+      this.isQuotaExhaustedState = false;
+      this.quotaExhaustedUntil = 0;
+      try {
+        localStorage.removeItem("degvs_firestore_quota_until");
+      } catch {}
+    }
+    return this.isQuotaExhaustedState;
+  }
+
+  public markQuotaExhausted(cooldownMinutes: number = 30): void {
+    console.warn(`[Messenger][QUEUE] ⚠️ Firestore write quota exhausted. Pausing automatic cloud retries for ${cooldownMinutes}m to protect backend.`);
+    this.isQuotaExhaustedState = true;
+    this.quotaExhaustedUntil = Date.now() + cooldownMinutes * 60 * 1000;
+    try {
+      localStorage.setItem("degvs_firestore_quota_until", String(this.quotaExhaustedUntil));
+    } catch {}
+    try {
+      this.onQuotaPause?.();
+    } catch {}
+    this.notifyListeners();
+  }
+
+  public clearQuotaExhausted(): void {
+    this.isQuotaExhaustedState = false;
+    this.quotaExhaustedUntil = 0;
+    try {
+      localStorage.removeItem("degvs_firestore_quota_until");
+    } catch {}
+    try {
+      this.onQuotaResume?.();
+    } catch {}
+    this.notifyListeners();
+  }
+
+  public subscribe(callback: QueueListener) {
     this.listeners.add(callback);
-    this.getQueueCount().then((count) => callback(this.isOnline(), count));
+    this.getQueueCount().then((count) => callback(this.isOnline(), count, this.isQuotaExhausted()));
     return () => {
       this.listeners.delete(callback);
     };
@@ -122,7 +180,9 @@ class IndexedDbQueueService {
 
   private async notifyListeners() {
     const count = await this.getQueueCount();
-    this.listeners.forEach((cb) => cb(this.isOnline(), count));
+    const quotaExhausted = this.isQuotaExhausted();
+    const online = this.isOnline();
+    this.listeners.forEach((cb) => cb(online, count, quotaExhausted));
   }
 
   /**
@@ -320,6 +380,11 @@ class IndexedDbQueueService {
       return { syncedCount: 0, failedCount: 0 };
     }
 
+    if (this.isQuotaExhausted()) {
+      console.log("[Messenger][QUEUE] ⏸️ syncQueue skipped: Firestore daily write quota exhausted. Retaining messages safely in IndexedDB.");
+      return { syncedCount: 0, failedCount: 0 };
+    }
+
     const queue = await this.getQueuedMessages();
     if (queue.length === 0) return { syncedCount: 0, failedCount: 0 };
 
@@ -329,11 +394,10 @@ class IndexedDbQueueService {
     let failedCount = 0;
 
     for (const item of queue) {
-      // Exponential backoff delay calculation: 1s, 2s, 4s, 8s, 16s, 32s (max 32s)
-      const backoffMs = Math.min(1000 * Math.pow(2, item.retryCount || 0), 32000);
+      // Exponential backoff delay calculation: 1s, 2s, 4s, 8s, 16s (max 16s)
+      const backoffMs = Math.min(1000 * Math.pow(2, item.retryCount || 0), 16000);
       if (item.retryCount > 0) {
-        console.log(`[Messenger][QUEUE] ⏱️ Backoff delay: waiting ${backoffMs}ms before retrying [${item.clientMessageId}] (attempt ${item.retryCount + 1})...`);
-        await new Promise((r) => setTimeout(r, Math.min(backoffMs, 2000))); // Quick sleep during batch loop
+        await new Promise((r) => setTimeout(r, Math.min(backoffMs, 2000)));
       }
 
       try {
@@ -341,12 +405,23 @@ class IndexedDbQueueService {
         if (confirmed) {
           await this.removeQueuedMessage(item.clientMessageId);
           syncedCount++;
-          console.log(`[Messenger][QUEUE] ✅ Message [${item.clientMessageId}] successfully sent to Firestore and removed from queue.`);
+          console.log(`[Messenger][QUEUE] ✅ Message [${item.clientMessageId}] successfully confirmed and removed from queue.`);
         } else {
-          await this.updateRetryState(item.clientMessageId, (item.retryCount || 0) + 1, "Failed to confirm in Firestore");
+          await this.updateRetryState(item.clientMessageId, (item.retryCount || 0) + 1, "Failed to confirm");
           failedCount++;
         }
       } catch (err: any) {
+        const isQuotaErr =
+          err?.code === "resource-exhausted" ||
+          err?.message?.includes("Quota limit exceeded") ||
+          err?.message?.includes("resource-exhausted");
+
+        if (isQuotaErr) {
+          this.markQuotaExhausted(15);
+          console.warn(`[Messenger][QUEUE] 🛑 Firestore Quota reached during syncQueue. Pausing queue sync.`);
+          break;
+        }
+
         console.error(`[Messenger][QUEUE] ❌ Error syncing queued message [${item.clientMessageId}]:`, err);
         await this.updateRetryState(item.clientMessageId, (item.retryCount || 0) + 1, err.message || "Network error");
         failedCount++;

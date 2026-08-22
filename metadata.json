@@ -1,6 +1,6 @@
 {
   "name": "Degv's Messenger",
-  "description": "Aplicación de mensajería instantánea con IA (Degv's AI), Smart Reply con detección de entidades (fechas/calendario, ubicaciones/mapas, contactos), Limpiador de Espacio local (IndexedDB) para multimedia, Centro de Actualización Multi-Plataforma en tiempo real, enlace con Ionic Appflow (compilación Cloud APK/AAB y Live Updates), GitHub/Antigravity, Termux, Capacitor y Bubblewrap.",
+  "description": "Aplicación de mensajería instantánea con IA (Degv's AI), Smart Reply con detección de entidades (fechas/calendario, ubicaciones/mapas, contactos), integración 24/7 con Oracle Cloud Always Free para optimización de tránsito continuo y baja latencia, Limpiador de Espacio local (IndexedDB) para multimedia, Centro de Actualización Multi-Plataforma en tiempo real, enlace con Ionic Appflow (compilación Cloud APK/AAB y Live Updates), GitHub/Antigravity, Termux, Capacitor y Bubblewrap.",
   "requestFramePermissions": ["camera", "microphone", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

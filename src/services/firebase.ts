@@ -17,6 +17,9 @@ import {
   serverTimestamp,
   Unsubscribe,
   Firestore,
+  disableNetwork,
+  enableNetwork,
+  setLogLevel,
 } from "firebase/firestore";
 import {
   getAuth,
@@ -30,6 +33,7 @@ import {
 } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
 import { Message, Room, UserProfile, Reaction } from "../types";
+import { indexedDbQueueService } from "./indexedDbQueueService";
 import {
   sendMessage as unifiedSendMessage,
   listenForConversationMessages,
@@ -74,8 +78,53 @@ export const db: Firestore = (() => {
   }
 })();
 
+// Silence internal Firestore log spam on quota limits
+try {
+  setLogLevel("silent");
+} catch {}
+
 // 3. Initialize Firebase Authentication
 export const auth = getAuth(app);
+
+/**
+ * Safely pause Firestore network to stop backoff loops when free quota is exceeded
+ */
+export async function pauseFirestoreNetwork(): Promise<void> {
+  try {
+    await disableNetwork(db);
+    console.log("[Firestore] 🛑 Network safely paused to prevent quota overload / backoff loops.");
+  } catch (e) {
+    // ignore
+  }
+}
+
+/**
+ * Resume Firestore network
+ */
+export async function resumeFirestoreNetwork(): Promise<void> {
+  try {
+    await enableNetwork(db);
+    console.log("[Firestore] 🟢 Network resumed.");
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Hook into indexedDbQueueService quota lifecycle
+indexedDbQueueService.onQuotaPause = () => {
+  pauseFirestoreNetwork();
+};
+
+indexedDbQueueService.onQuotaResume = () => {
+  resumeFirestoreNetwork();
+};
+
+// If quota is already marked as exhausted on initialization, pause network immediately
+if (typeof window !== "undefined") {
+  if (indexedDbQueueService.isQuotaExhausted()) {
+    pauseFirestoreNetwork();
+  }
+}
 
 // Helper to convert Firebase User to UserProfile
 export function mapFirebaseUserToProfile(fbUser: FirebaseUser, extra: Partial<UserProfile> = {}): UserProfile {
@@ -157,11 +206,18 @@ export async function initAnonymousUser(existingProfile?: Partial<UserProfile>):
   }
 }
 
+const registeredUsersCache = new Set<string>();
+
 /**
  * Guarda o actualiza la información básica del usuario en la colección 'users' de Firestore con metadatos del dispositivo
  */
 export async function registerUser(user: UserProfile): Promise<void> {
+  if (!user?.id) return;
+  if (registeredUsersCache.has(user.id)) return;
+  if (indexedDbQueueService.isQuotaExhausted()) return;
+
   try {
+    registeredUsersCache.add(user.id);
     const userDocRef = doc(db, "users", user.id);
     const device = getDeviceMetadata();
 
@@ -183,8 +239,13 @@ export async function registerUser(user: UserProfile): Promise<void> {
       },
       { merge: true }
     );
-  } catch (error) {
-    console.error("[Firestore] Error in registerUser:", error);
+  } catch (error: any) {
+    if (error?.code === "resource-exhausted" || error?.message?.includes("Quota limit exceeded")) {
+      indexedDbQueueService.markQuotaExhausted(60);
+      console.warn("[Firestore] Quota limit reached in registerUser. Continuing in local-first mode.");
+    } else {
+      console.warn("[Firestore] Notice in registerUser:", error?.message || error);
+    }
   }
 }
 
@@ -613,6 +674,7 @@ export function subscribeToFirebaseAuth(onUserChanged: (user: UserProfile | null
  * Sincronización del Perfil de Usuario en Firestore
  */
 export async function syncUserProfileToFirestore(user: UserProfile): Promise<void> {
+  if (indexedDbQueueService.isQuotaExhausted()) return;
   try {
     const userDocRef = doc(db, "users", user.id);
     await setDoc(
@@ -631,8 +693,13 @@ export async function syncUserProfileToFirestore(user: UserProfile): Promise<voi
       },
       { merge: true }
     );
-  } catch (error) {
-    console.error("[Firestore] Error syncing user profile:", error);
+  } catch (error: any) {
+    if (error?.code === "resource-exhausted" || error?.message?.includes("Quota limit exceeded")) {
+      indexedDbQueueService.markQuotaExhausted(15);
+      console.warn("[Firestore] Quota limit reached in syncUserProfileToFirestore.");
+    } else {
+      console.warn("[Firestore] Notice syncing user profile:", error?.message || error);
+    }
   }
 }
 
@@ -780,11 +847,16 @@ export async function updateMessageReactionInFirestore(
   messageId: string,
   reactions: Reaction[]
 ): Promise<void> {
+  if (indexedDbQueueService.isQuotaExhausted()) return;
   try {
     const msgRef = doc(db, "messages", messageId);
     await updateDoc(msgRef, { reactions });
-  } catch (e) {
-    console.warn("[Firestore] Reaction update notice:", e);
+  } catch (e: any) {
+    if (e?.code === "resource-exhausted" || e?.message?.includes("Quota limit exceeded")) {
+      indexedDbQueueService.markQuotaExhausted(30);
+    } else {
+      console.warn("[Firestore] Reaction update notice:", e?.message || e);
+    }
   }
 }
 
@@ -792,9 +864,9 @@ export async function updateMessageReactionInFirestore(
  * 5. Guardar o actualizar sala de chat en Firestore
  */
 export async function saveRoomToFirestore(room: Room): Promise<void> {
+  if (indexedDbQueueService.isQuotaExhausted()) return;
   try {
     const roomRef = doc(db, "rooms", room.id);
-    const chatsRoomRef = doc(db, "chats_rooms", room.id);
     const participantIds = Array.isArray(room.participants)
       ? room.participants.map((p) => (typeof p === "string" ? p : p.id))
       : [];
@@ -814,9 +886,12 @@ export async function saveRoomToFirestore(room: Room): Promise<void> {
     };
 
     await setDoc(roomRef, roomPayload, { merge: true });
-    await setDoc(chatsRoomRef, roomPayload, { merge: true });
-  } catch (e) {
-    console.warn("[Firestore] saveRoomToFirestore notice:", e);
+  } catch (e: any) {
+    if (e?.code === "resource-exhausted" || e?.message?.includes("Quota limit exceeded")) {
+      indexedDbQueueService.markQuotaExhausted(15);
+    } else {
+      console.warn("[Firestore] saveRoomToFirestore notice:", e.message || e);
+    }
   }
 }
 
@@ -832,6 +907,10 @@ export async function publishPlatformUpdateToFirestore(payload: {
   freedBytes?: number;
   metadata?: any;
 }): Promise<string | null> {
+  if (indexedDbQueueService.isQuotaExhausted()) {
+    console.log("[Firestore Updates] Quota in cooldown. Skipping cloud publish.");
+    return `local_update_${Date.now()}`;
+  }
   try {
     const updatesCol = collection(db, "platform_updates");
     const docData = {
@@ -871,8 +950,13 @@ export async function publishPlatformUpdateToFirestore(payload: {
 
     console.log(`[Firestore Updates] ✅ Versión publicada con éxito. Doc ID: ${docRef.id}`);
     return docRef.id;
-  } catch (error) {
-    console.error("[Firestore Updates] ❌ Error publicando actualización en Firestore:", error);
+  } catch (error: any) {
+    if (error?.code === "resource-exhausted" || error?.message?.includes("Quota limit exceeded")) {
+      indexedDbQueueService.markQuotaExhausted(15);
+      console.warn("[Firestore Updates] Quota limit reached. Saved locally.");
+      return `local_update_${Date.now()}`;
+    }
+    console.warn("[Firestore Updates] Notice publicando actualización en Firestore:", error?.message || error);
     return null;
   }
 }

@@ -36,6 +36,7 @@ import {
   FolderGit2,
   Trash2,
   RefreshCw,
+  Cloud,
 } from "lucide-react";
 import { StorageCleanerModal } from "./StorageCleanerModal";
 
@@ -65,6 +66,7 @@ interface SettingsModalProps {
   onOpenPublishDeploy?: () => void;
   onOpenPlatformUpdate?: () => void;
   onOpenGitHubActions?: () => void;
+  onOpenOracleCloud?: () => void;
   onOpenBackupModal?: () => void;
   onOpenSupportBot?: () => void;
   onOpenStorageCleaner?: () => void;
@@ -101,6 +103,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenPublishDeploy,
   onOpenPlatformUpdate,
   onOpenGitHubActions,
+  onOpenOracleCloud,
   onOpenBackupModal,
   onOpenSupportBot,
   onOpenStorageCleaner,
@@ -603,6 +606,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <LifeBuoy className="w-4 h-4 text-cyan-400 group-hover:rotate-45 transition-transform" />
             <span>Soporte Técnico Especializado (Reportar Errores o Dudas)</span>
+          </button>
+        )}
+
+        {/* Oracle Cloud Always Free 24/7 Data Transit & Continuous Relay Button */}
+        {onOpenOracleCloud && (
+          <button
+            onClick={() => {
+              onClose();
+              onOpenOracleCloud();
+            }}
+            className="w-full p-3.5 rounded-2xl bg-gradient-to-r from-cyan-950/80 via-slate-900 to-blue-950/80 border border-cyan-500/50 hover:border-cyan-400 text-white font-extrabold text-xs flex items-center justify-between gap-2.5 transition shadow-xl shadow-cyan-950/40 group active:scale-98"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 rounded-xl bg-cyan-500/20 text-cyan-300 group-hover:scale-110 transition-transform">
+                <Cloud className="w-4 h-4 text-cyan-300 animate-pulse" />
+              </div>
+              <div className="text-left">
+                <p className="font-extrabold text-slate-100 flex items-center gap-1.5">
+                  <span>Oracle Cloud Always Free (24/7 Activo)</span>
+                  <span className="w-2 h-2 rounded-full bg-[#00E676] animate-ping" />
+                </p>
+                <p className="text-[10px] text-slate-400 font-normal">Tránsito de datos continuo, baja latencia y relay sin interrupción</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 uppercase font-black">
+              24/7 &gt;
+            </span>
           </button>
         )}
 

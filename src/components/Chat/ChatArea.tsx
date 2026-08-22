@@ -123,7 +123,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     // 1. Listen in real-time to messages for activeRoom.id directly from Firestore
     const unsubMessages = listenForRoomMessages(activeRoom.id, (cloudMsgs) => {
-      console.log(`[ChatArea: onSnapshot] 📥 Real-time data reception verified: ${cloudMsgs.length} messages received from Firestore for room '${activeRoom.id}':`, cloudMsgs);
+      console.log(`[listenForRoomMessages: onSnapshot callback] 📥 Real-time data reception verified: ${cloudMsgs.length} messages received from Firestore for room '${activeRoom.id}':`, cloudMsgs);
+      console.log(`[listenForRoomMessages: onSnapshot callback] 📦 Full payload object received in client:`, JSON.stringify(cloudMsgs, null, 2));
       setRealtimeMessages(cloudMsgs || []);
     });
 
