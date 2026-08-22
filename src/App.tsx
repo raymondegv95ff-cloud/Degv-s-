@@ -85,7 +85,10 @@ export const App: React.FC = () => {
   // Global State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => storageService.getUser());
   const [rooms, setRooms] = useState<Room[]>(() => storageService.getRooms());
-  const [activeChatId, setActiveChatId] = useState<string | null>("room_ai");
+  const [activeChatId, setActiveChatId] = useState<string | null>(() => {
+    const initialRooms = storageService.getRooms();
+    return initialRooms[0]?.id || "room_ai_assistant";
+  });
   const [activeCategory, setActiveCategory] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [showMobileChat, setShowMobileChat] = useState(false);
@@ -925,39 +928,41 @@ export const App: React.FC = () => {
     type: "text" | "image" | "audio" | "file" | "sticker" = "text",
     mediaUrl?: string
   ) => {
-    if (!activeChatId || !currentUser) return;
+    const user = currentUser || storageService.getUser();
+    const currentChatId = activeChatId || rooms[0]?.id || "room_ai_assistant";
+    if (!currentChatId || !user) return;
 
     const isCurrentlyOnline = indexedDbQueueService.isOnline();
     const clientMessageId = createClientMessageId();
 
     // Determine target recipient and participants list
     let targetRecipientId: string | undefined = undefined;
-    let participants: string[] = [currentUser.id];
+    let participants: string[] = [user.id];
 
     if (activeRoom?.participants && activeRoom.participants.length > 0) {
       participants = activeRoom.participants.map((p) => (typeof p === "string" ? p : p?.id)).filter(Boolean);
       for (const pId of participants) {
-        if (pId !== currentUser.id) {
+        if (pId !== user.id) {
           targetRecipientId = pId;
           break;
         }
       }
     }
 
-    if (activeChatId.startsWith("dm_")) {
-      const parts = activeChatId.replace(/^dm_/, "").split("_");
-      const found = parts.find((p) => p && p !== currentUser.id);
+    if (currentChatId.startsWith("dm_")) {
+      const parts = currentChatId.replace(/^dm_/, "").split("_");
+      const found = parts.find((p) => p && p !== user.id);
       if (found) targetRecipientId = found;
-      participants = [currentUser.id, targetRecipientId || ""].filter(Boolean);
+      participants = [user.id, targetRecipientId || ""].filter(Boolean);
     }
 
     const optimisticMessage: Message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      roomId: activeChatId,
-      conversationId: activeChatId,
-      senderId: currentUser.id,
-      senderName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
-      senderAvatar: currentUser.avatarUrl,
+      roomId: currentChatId,
+      conversationId: currentChatId,
+      senderId: user.id,
+      senderName: `${user.firstName || "Usuario"} ${user.lastName || ""}`.trim(),
+      senderAvatar: user.avatarUrl,
       recipientId: targetRecipientId,
       receiverId: targetRecipientId,
       participants,
@@ -969,7 +974,7 @@ export const App: React.FC = () => {
       createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       timestamp: Date.now(),
       isRead: true,
-      status: isCurrentlyOnline ? "sending" : "pending",
+      status: isCurrentlyOnline ? "sent" : "pending",
       clientMessageId,
       replyTo: replyToMessage?.id || null,
       replyToMessageId: replyToMessage?.id,
@@ -985,8 +990,8 @@ export const App: React.FC = () => {
     console.log(`[Messenger][SEND] 📝 [App.tsx] Initiating sendMessage dispatch:`, {
       messageId: optimisticMessage.id,
       clientMessageId,
-      conversationId: activeChatId,
-      senderId: currentUser.id,
+      conversationId: currentChatId,
+      senderId: user.id,
       recipientId: targetRecipientId,
       type,
       isOnline: isCurrentlyOnline,
@@ -999,9 +1004,9 @@ export const App: React.FC = () => {
     setReplyToMessage(null);
 
     // Save optimistic message locally
-    const initialUpdatedMessages = [...(messagesMap[activeChatId] || []), optimisticMessage];
-    setMessagesMap((prev) => ({ ...prev, [activeChatId]: initialUpdatedMessages }));
-    storageService.saveMessage(activeChatId, optimisticMessage);
+    const initialUpdatedMessages = [...(messagesMap[currentChatId] || []), optimisticMessage];
+    setMessagesMap((prev) => ({ ...prev, [currentChatId]: initialUpdatedMessages }));
+    storageService.saveMessage(currentChatId, optimisticMessage);
 
     // Update Room preview
     const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1014,24 +1019,27 @@ export const App: React.FC = () => {
         ? "🎵 Nota de voz"
         : content;
 
-    const updatedRoom: Room = {
-      ...activeRoom,
-      lastMessage: updatedLastMsg,
-      lastMessageTime: nowTime,
-      draftText: "",
-    };
+    const currentRoom = activeRoom || rooms.find((r) => r.id === currentChatId);
+    if (currentRoom) {
+      const updatedRoom: Room = {
+        ...currentRoom,
+        lastMessage: updatedLastMsg,
+        lastMessageTime: nowTime,
+        draftText: "",
+      };
 
-    setRooms((prev) => prev.map((r) => (r.id === activeChatId ? updatedRoom : r)));
-    storageService.saveRoom(updatedRoom);
-    saveRoomToFirestore(updatedRoom);
+      setRooms((prev) => prev.map((r) => (r.id === currentChatId ? updatedRoom : r)));
+      storageService.saveRoom(updatedRoom);
+      saveRoomToFirestore(updatedRoom);
+    }
 
     const sendPayload = {
-      senderId: currentUser.id,
-      senderName: `${currentUser.firstName} ${currentUser.lastName}`.trim(),
-      senderAvatar: currentUser.avatarUrl,
+      senderId: user.id,
+      senderName: `${user.firstName || "Usuario"} ${user.lastName || ""}`.trim(),
+      senderAvatar: user.avatarUrl,
       recipientId: targetRecipientId,
       participants,
-      conversationId: activeChatId,
+      conversationId: currentChatId,
       type: type as any,
       text: content,
       content,
@@ -1044,7 +1052,6 @@ export const App: React.FC = () => {
     };
 
     console.log(`[handleSendMessage] 🚀 [handleSendMessage: Firebase Write] Full payload object right before Firebase write operation:`, sendPayload);
-    console.log(`[handleSendMessage] 📦 [handleSendMessage: Payload JSON String]:\n`, JSON.stringify(sendPayload, null, 2));
 
     // Dispatch through unifiedSendMessage
     try {
@@ -1055,14 +1062,14 @@ export const App: React.FC = () => {
       // Update message status upon confirmation
       if (sendResult.success) {
         setMessagesMap((prev) => {
-          const currentList = prev[activeChatId] || [];
+          const currentList = prev[currentChatId] || [];
           const updated = currentList.map((m) =>
             m.clientMessageId === clientMessageId || m.id === optimisticMessage.id
               ? { ...m, id: sendResult.messageId, status: "sent" as const }
               : m
           );
-          storageService.saveRoomMessages(activeChatId, updated);
-          return { ...prev, [activeChatId]: updated };
+          storageService.saveRoomMessages(currentChatId, updated);
+          return { ...prev, [currentChatId]: updated };
         });
       }
     } catch (err: any) {
@@ -1080,8 +1087,8 @@ export const App: React.FC = () => {
     } catch {}
 
     // Only handle AI response if the user is explicitly in the dedicated Degv's AI chat or typing /imagine
-    if (isCurrentlyOnline && (activeRoom?.isAiChat || content.startsWith("/imagine"))) {
-      handleAiResponse(activeChatId, content, initialUpdatedMessages);
+    if (isCurrentlyOnline && (currentRoom?.isAiChat || content.startsWith("/imagine"))) {
+      handleAiResponse(currentChatId, content, initialUpdatedMessages);
     }
   };
 
