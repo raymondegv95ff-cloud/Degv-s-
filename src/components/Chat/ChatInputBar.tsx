@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
-import { Message, Room } from "../../types";
+import { Message, Room, QuickReplyItem } from "../../types";
 import { ImageFilterModal } from "../Modals/ImageFilterModal";
 import { StickerPickerPanel } from "./StickerPickerPanel";
 import { CalendarEventModal } from "../Modals/CalendarEventModal";
+import { QuickRepliesModal } from "../Modals/QuickRepliesModal";
 import { SmartReplyService, DetectedEntity } from "../../services/smartReplyService";
+import { storageService } from "../../services/storageService";
 import {
   Smile,
   Paperclip,
@@ -30,6 +32,7 @@ import {
   ExternalLink,
   CalendarPlus,
   Compass,
+  Zap,
 } from "lucide-react";
 
 interface ChatInputBarProps {
@@ -82,6 +85,24 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
   // Contextual Smart Actions & Calendar Modal State
   const [selectedCalendarEntity, setSelectedCalendarEntity] = useState<DetectedEntity | null>(null);
   const [showCalendarModal, setShowCalendarModal] = useState<boolean>(false);
+
+  // Quick Replies State
+  const [showQuickRepliesModal, setShowQuickRepliesModal] = useState<boolean>(false);
+  const [quickRepliesList, setQuickRepliesList] = useState<QuickReplyItem[]>([]);
+
+  useEffect(() => {
+    setQuickRepliesList(storageService.getQuickReplies());
+  }, [activeChatId]);
+
+  const matchingQuickReplies = useMemo(() => {
+    if (!inputText.startsWith("/")) return [];
+    const query = inputText.toLowerCase();
+    return quickRepliesList.filter(
+      (q) =>
+        q.shortcut.toLowerCase().startsWith(query) ||
+        q.text.toLowerCase().includes(query.replace("/", ""))
+    );
+  }, [inputText, quickRepliesList]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<any>(null);
@@ -604,6 +625,50 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
         </div>
       )}
 
+      {/* Quick Replies Autocomplete Floating Popover */}
+      {inputText.startsWith("/") && matchingQuickReplies.length > 0 && (
+        <div className="absolute bottom-20 left-4 right-4 sm:left-12 sm:max-w-md bg-slate-950/95 border border-[#00E676]/40 rounded-2xl p-2 shadow-2xl z-50 flex flex-col gap-1 backdrop-blur-xl animate-in zoom-in-95 duration-100 max-h-56 overflow-y-auto custom-scrollbar">
+          <div className="flex items-center justify-between px-2 py-1 text-[11px] font-bold text-[#00E676] border-b border-slate-800">
+            <span className="flex items-center gap-1">
+              <Zap className="w-3 h-3" />
+              <span>Respuestas Rápidas ({matchingQuickReplies.length})</span>
+            </span>
+            <button
+              onClick={() => setShowQuickRepliesModal(true)}
+              className="text-[10px] text-slate-400 hover:text-slate-200 underline"
+            >
+              Gestionar
+            </button>
+          </div>
+          {matchingQuickReplies.map((qr) => (
+            <button
+              key={qr.id}
+              onClick={() => {
+                onSendMessage(qr.text, "text");
+                setInputText("");
+                onDraftChange("");
+              }}
+              className="flex items-center justify-between p-2 rounded-xl hover:bg-white/10 text-left transition group"
+            >
+              <div className="flex-1 min-w-0 pr-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono text-xs font-black text-[#00E676] bg-[#00E676]/10 px-1.5 py-0.5 rounded">
+                    {qr.shortcut}
+                  </span>
+                  <span className="text-[10px] text-slate-400 uppercase font-mono">
+                    {qr.category}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-200 truncate mt-0.5">{qr.text}</p>
+              </div>
+              <span className="text-[10px] text-slate-400 group-hover:text-[#00E676] font-bold shrink-0">
+                Enviar ↵
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Attachments Menu Popover */}
       {showAttachMenu && (
         <div className="absolute bottom-20 left-12 bg-[#0a0a0a] border border-white/10 rounded-2xl p-2 shadow-2xl z-50 flex flex-col gap-1 w-48 text-xs text-slate-200 backdrop-blur-xl">
@@ -726,6 +791,15 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
             <Paperclip className="w-6 h-6" />
           </button>
 
+          {/* Quick Replies Toggle */}
+          <button
+            onClick={() => setShowQuickRepliesModal(true)}
+            className="p-2 text-slate-400 hover:text-[#00E676] transition-colors shrink-0"
+            title="Respuestas Rápidas (Atajos /)"
+          >
+            <Zap className="w-5 h-5 text-amber-400/90 hover:text-amber-300" />
+          </button>
+
           {/* Text Input */}
           <input
             ref={inputRef}
@@ -780,6 +854,18 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
         chatName={chatName}
         onConfirmReply={(replyText) => {
           onSendMessage(replyText, "text");
+        }}
+      />
+
+      {/* Quick Replies Manager Modal */}
+      <QuickRepliesModal
+        isOpen={showQuickRepliesModal}
+        onClose={() => {
+          setShowQuickRepliesModal(false);
+          setQuickRepliesList(storageService.getQuickReplies());
+        }}
+        onSelectQuickReply={(text) => {
+          onSendMessage(text, "text");
         }}
       />
     </div>

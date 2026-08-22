@@ -608,6 +608,360 @@ app.post("/api/ai/translate", async (req, res) => {
   }
 });
 
+// 4b. AI Message Sentiment Indicator (using Gemini)
+const SENTIMENT_LOOKUP: Record<string, { emoji: string; label: string }> = {
+  joy: { emoji: "😊", label: "Alegría / Positivo" },
+  doubt: { emoji: "🤔", label: "Duda / Pregunta" },
+  urgency: { emoji: "🚨", label: "Urgencia / Prioridad" },
+  neutral: { emoji: "💬", label: "Neutral" },
+  anger: { emoji: "😠", label: "Molestia" },
+  sadness: { emoji: "😢", label: "Tristeza" },
+  love: { emoji: "❤️", label: "Cariño / Gratitud" },
+  idea: { emoji: "💡", label: "Idea / Propuesta" },
+};
+
+function heuristicSentimentClassifier(text: string): { sentiment: string; emoji: string; label: string; confidence: number } {
+  const lower = (text || "").toLowerCase().trim();
+  if (!lower) {
+    return { sentiment: "neutral", ...SENTIMENT_LOOKUP.neutral, confidence: 0.9 };
+  }
+
+  // Urgency detection
+  if (
+    lower.includes("urgente") ||
+    lower.includes("emergencia") ||
+    lower.includes("inmediato") ||
+    lower.includes("asap") ||
+    lower.includes("rápido") ||
+    lower.includes("rapido") ||
+    lower.includes("cuanto antes") ||
+    lower.includes("alerta") ||
+    lower.includes("grave") ||
+    lower.includes("apúrate") ||
+    lower.includes("apurate") ||
+    lower.includes("importante")
+  ) {
+    return { sentiment: "urgency", ...SENTIMENT_LOOKUP.urgency, confidence: 0.95 };
+  }
+
+  // Doubt / Question detection
+  if (
+    lower.includes("?") ||
+    lower.includes("¿") ||
+    lower.startsWith("como ") ||
+    lower.startsWith("cómo ") ||
+    lower.startsWith("cuando ") ||
+    lower.startsWith("cuándo ") ||
+    lower.startsWith("donde ") ||
+    lower.startsWith("dónde ") ||
+    lower.startsWith("por que") ||
+    lower.startsWith("por qué") ||
+    lower.includes("sera que") ||
+    lower.includes("será que") ||
+    lower.includes("tal vez") ||
+    lower.includes("quizas") ||
+    lower.includes("quizá") ||
+    lower.includes("duda") ||
+    lower.includes("no sé") ||
+    lower.includes("no estoy seguro")
+  ) {
+    return { sentiment: "doubt", ...SENTIMENT_LOOKUP.doubt, confidence: 0.92 };
+  }
+
+  // Love / Gratitude
+  if (
+    lower.includes("gracias") ||
+    lower.includes("agradezco") ||
+    lower.includes("te quiero") ||
+    lower.includes("te amo") ||
+    lower.includes("abrazo") ||
+    lower.includes("besos") ||
+    lower.includes("cariño") ||
+    lower.includes("encanta") ||
+    lower.includes("adoro") ||
+    lower.includes("❤️") ||
+    lower.includes("💖")
+  ) {
+    return { sentiment: "love", ...SENTIMENT_LOOKUP.love, confidence: 0.94 };
+  }
+
+  // Idea / Proposal
+  if (
+    lower.includes("propongo") ||
+    lower.includes("que te parece si") ||
+    lower.includes("qué te parece si") ||
+    lower.includes("tengo una idea") ||
+    lower.includes("se me ocurrió") ||
+    lower.includes("podríamos") ||
+    lower.includes("podriamos") ||
+    lower.includes("sugiero") ||
+    lower.includes("proyecto") ||
+    lower.includes("💡")
+  ) {
+    return { sentiment: "idea", ...SENTIMENT_LOOKUP.idea, confidence: 0.9 };
+  }
+
+  // Joy / Celebration
+  if (
+    lower.includes("jaja") ||
+    lower.includes("jeje") ||
+    lower.includes("genial") ||
+    lower.includes("excelente") ||
+    lower.includes("super") ||
+    lower.includes("súper") ||
+    lower.includes("perfecto") ||
+    lower.includes("felicidades") ||
+    lower.includes("felicidad") ||
+    lower.includes("bien hecho") ||
+    lower.includes("buenísimo") ||
+    lower.includes("buenisimo") ||
+    lower.includes("increible") ||
+    lower.includes("increíble") ||
+    lower.includes("🎉") ||
+    lower.includes("🔥") ||
+    lower.includes("😊")
+  ) {
+    return { sentiment: "joy", ...SENTIMENT_LOOKUP.joy, confidence: 0.95 };
+  }
+
+  // Anger / Frustration
+  if (
+    lower.includes("enojado") ||
+    lower.includes("molesto") ||
+    lower.includes("furia") ||
+    lower.includes("odio") ||
+    lower.includes("pésimo") ||
+    lower.includes("pesimo") ||
+    lower.includes("terrible") ||
+    lower.includes("horrible") ||
+    lower.includes("inaceptable") ||
+    lower.includes("harto") ||
+    lower.includes("😡") ||
+    lower.includes("😠")
+  ) {
+    return { sentiment: "anger", ...SENTIMENT_LOOKUP.anger, confidence: 0.92 };
+  }
+
+  // Sadness / Regret
+  if (
+    lower.includes("triste") ||
+    lower.includes("lamento") ||
+    lower.includes("pena") ||
+    lower.includes("desánimo") ||
+    lower.includes("desanimo") ||
+    lower.includes("dolor") ||
+    lower.includes("mala noticia") ||
+    lower.includes("deprimido") ||
+    lower.includes("😢") ||
+    lower.includes("😭")
+  ) {
+    return { sentiment: "sadness", ...SENTIMENT_LOOKUP.sadness, confidence: 0.9 };
+  }
+
+  return { sentiment: "neutral", ...SENTIMENT_LOOKUP.neutral, confidence: 0.85 };
+}
+
+app.post("/api/ai/analyze-sentiment", async (req, res) => {
+  try {
+    const { text = "" } = req.body;
+    if (!text || text.trim().length === 0) {
+      return res.json({
+        sentiment: "neutral",
+        emoji: "💬",
+        label: "Neutral",
+        confidence: 1.0,
+      });
+    }
+
+    const fallback = heuristicSentimentClassifier(text);
+    const ai = getGeminiAI();
+    if (!ai) {
+      return res.json(fallback);
+    }
+
+    const prompt = `Analiza el sentimiento predominante del siguiente mensaje de chat:
+"${text.slice(0, 300)}"
+
+Clasifícalo ÚNICAMENTE en una de las siguientes categorías exactas:
+- "joy" (alegría, satisfacción, celebración, risa, optimismo)
+- "doubt" (duda, incertidumbre, pregunta, indecisión, curiosidad)
+- "urgency" (urgencia, alta prioridad, alarma, solicitud inmediata)
+- "neutral" (informativo, formal, neutro, descriptivo)
+- "anger" (enojo, molestia, reclamo, descontento)
+- "sadness" (tristeza, pesar, disculpa sincera, desánimo)
+- "love" (cariño, aprecio, afecto, agradecimiento profundo)
+- "idea" (propuesta, sugerencia creativa, iniciativa)
+
+Responde en formato JSON estricto:
+{
+  "sentiment": "joy" | "doubt" | "urgency" | "neutral" | "anger" | "sadness" | "love" | "idea",
+  "confidence": 0.95,
+  "explanation": "breve motivo de 4 a 8 palabras"
+}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.7-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+      },
+    });
+
+    if (response.text) {
+      const parsed = JSON.parse(response.text);
+      const cat = parsed.sentiment?.toLowerCase();
+      if (SENTIMENT_LOOKUP[cat]) {
+        return res.json({
+          sentiment: cat,
+          emoji: SENTIMENT_LOOKUP[cat].emoji,
+          label: SENTIMENT_LOOKUP[cat].label,
+          confidence: parsed.confidence || 0.9,
+          explanation: parsed.explanation || "",
+        });
+      }
+    }
+
+    res.json(fallback);
+  } catch (error) {
+    const fallback = heuristicSentimentClassifier(req.body?.text || "");
+    res.json(fallback);
+  }
+});
+
+// 4c. AI Daily Digest ("Resumen Diario 24h") using Degv's AI
+app.post("/api/ai/daily-digest", async (req, res) => {
+  try {
+    const { messages = [], hours = 24, userTimezone = "America/Bogota" } = req.body;
+    const ai = getGeminiAI();
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.json({
+        generatedAt: Date.now(),
+        period: `Últimas ${hours} horas`,
+        totalMessagesAnalyzed: 0,
+        activeRoomsCount: 0,
+        executiveSummary: "No se registraron mensajes recibidos en las últimas 24 horas para generar el reporte diario.",
+        keyHighlights: [],
+        pendingActionItems: ["¡Bandeja al día! Sin tareas ni seguimientos pendientes."],
+        overallTone: "Tranquilo / Sin actividad reciente",
+        topParticipants: [],
+      });
+    }
+
+    // Format messages for analysis
+    const formattedMessages = messages.slice(-100).map((m: any) => ({
+      chat: m.roomName || m.roomId || "Chat",
+      sender: m.senderName || "Usuario",
+      text: (m.content || m.text || "").slice(0, 200),
+      time: m.createdAt || new Date(m.timestamp || Date.now()).toLocaleTimeString(),
+      type: m.type || "text",
+    }));
+
+    const roomsSet = new Set(messages.map((m: any) => m.roomName || m.roomId));
+    const participantsMap = new Map<string, number>();
+    messages.forEach((m: any) => {
+      const s = m.senderName || "Usuario";
+      participantsMap.set(s, (participantsMap.get(s) || 0) + 1);
+    });
+    const topParticipants = Array.from(participantsMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name]) => name);
+
+    if (!ai) {
+      // Heuristic offline Daily Digest
+      return res.json({
+        generatedAt: Date.now(),
+        period: `Últimas ${hours} horas`,
+        totalMessagesAnalyzed: messages.length,
+        activeRoomsCount: roomsSet.size,
+        executiveSummary: `Resumen del día en Degv's Messenger: Se registraron ${messages.length} mensajes en ${roomsSet.size} conversaciones activas. Los temas principales abarcan coordinación de actividades diarias, seguimiento de proyectos y comunicación fluida entre contactos.`,
+        keyHighlights: Array.from(roomsSet).slice(0, 4).map((room) => ({
+          roomName: String(room),
+          senderName: "Participantes del chat",
+          highlight: `Intercambio de mensajes y actualizaciones recientes en la sala ${room}.`,
+          urgencyLevel: "normal",
+          time: "Reciente",
+        })),
+        pendingActionItems: [
+          "Revisar mensajes pendientes con respuestas rápidas.",
+          "Verificar confirmaciones de horarios o reuniones acordadas.",
+        ],
+        overallTone: "Productivo y Colaborativo",
+        topParticipants,
+      });
+    }
+
+    const prompt = `Eres Degv's AI, el asistente de inteligencia ejecutiva de Degv's Messenger.
+Genera un "Resumen Diario" (Daily Digest) claro, profesional, estructurado y muy útil para el usuario, analizando los mensajes recibidos durante las últimas ${hours} horas en sus diferentes chats.
+
+Mensajes registrados:
+${JSON.stringify(formattedMessages, null, 2)}
+
+Tu tarea es:
+1. Redactar un "executiveSummary" conciso (2-3 párrafos breves) resumiendo el flujo global del día, acuerdos y novedades.
+2. Identificar los "keyHighlights" más relevantes organizados por chat/sala (máximo 6 highlights), indicando sala, quién intervino, qué se trató y nivel de urgencia ("alta", "media" o "normal").
+3. Detectar "pendingActionItems": lista de tareas, compromisos, fechas límite, preguntas sin responder o acuerdos que requieran acción del usuario.
+4. Definir el "overallTone" del día (ej: "Enfocado en proyectos", "Social y relajado", "Coordinación urgente").
+
+Responde estrictamente en formato JSON:
+{
+  "executiveSummary": "Párrafos con el resumen ejecutivo del día...",
+  "keyHighlights": [
+    {
+      "roomName": "Nombre del chat",
+      "senderName": "Nombre del contacto",
+      "highlight": "Síntesis del punto importante...",
+      "urgencyLevel": "alta" | "media" | "normal",
+      "time": "Hora o momento aproximado"
+    }
+  ],
+  "pendingActionItems": [
+    "Tarea o seguimiento 1...",
+    "Tarea o seguimiento 2..."
+  ],
+  "overallTone": "Tono general del día"
+}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.7-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+      },
+    });
+
+    let result = {
+      generatedAt: Date.now(),
+      period: `Últimas ${hours} horas`,
+      totalMessagesAnalyzed: messages.length,
+      activeRoomsCount: roomsSet.size,
+      executiveSummary: `Resumen ejecutivo generado: Los participantes compartieron novedades clave en ${roomsSet.size} salas de chat.`,
+      keyHighlights: [],
+      pendingActionItems: ["Revisar conversaciones recientes"],
+      overallTone: "Activo",
+      topParticipants,
+    };
+
+    if (response.text) {
+      try {
+        const parsed = JSON.parse(response.text);
+        result = { ...result, ...parsed };
+      } catch (e) {
+        console.warn("Daily digest JSON parse error, using fallback");
+      }
+    }
+
+    res.json(result);
+  } catch (error: any) {
+    console.error("Daily digest error:", error);
+    res.status(500).json({
+      error: "Error generando resumen diario",
+      details: error.message || String(error),
+    });
+  }
+});
+
 // 5. AI Voice Note Audio Transcription
 app.post("/api/ai/transcribe", async (req, res) => {
   try {

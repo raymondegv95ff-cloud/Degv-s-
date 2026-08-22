@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
-import { Message, BubbleStyle } from "../../types";
+import { Message, BubbleStyle, MessageSentimentData } from "../../types";
+import { sentimentService } from "../../services/sentimentService";
+import { VoiceWaveformPlayer } from "./VoiceWaveformPlayer";
 import {
   Check,
   CheckCheck,
@@ -10,8 +12,6 @@ import {
   Share2,
   Smile,
   Globe,
-  Play,
-  Pause,
   FileText,
   Sparkles,
   Bot,
@@ -57,6 +57,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [isTranslating, setIsTranslating] = useState(false);
   const [isAutoTranscribing, setIsAutoTranscribing] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [sentimentData, setSentimentData] = useState<MessageSentimentData | null>(message.sentiment || null);
+
+  // Analyze or retrieve message sentiment
+  useEffect(() => {
+    if (message.sentiment) {
+      setSentimentData(message.sentiment);
+    } else if (message.type === "text" && message.content && message.content.trim().length > 1) {
+      let isMounted = true;
+      sentimentService.getSentimentForText(message.content).then((res) => {
+        if (isMounted) {
+          setSentimentData(res);
+        }
+      });
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [message.id, message.content, message.type, message.sentiment]);
 
   // Auto-transcribe audio messages automatically when received/viewed
   useEffect(() => {
@@ -256,58 +274,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           </div>
         )}
 
-        {/* Audio / Voice Note Player */}
+        {/* Audio / Voice Note Player with Dynamic Waveform */}
         {message.type === "audio" && (
-          <div className="space-y-2 min-w-[220px]">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setIsPlayingAudio(!isPlayingAudio)}
-                className={`p-2.5 rounded-full transition shadow-md ${
-                  isMe
-                    ? "bg-slate-950 text-[#00E676] hover:bg-slate-900"
-                    : "bg-[#00E676] text-slate-950 hover:bg-[#00E676]/90"
-                }`}
-              >
-                {isPlayingAudio ? (
-                  <Pause className="w-4 h-4 fill-current" />
-                ) : (
-                  <Play className="w-4 h-4 fill-current ml-0.5" />
-                )}
-              </button>
-
-              {/* Waveform Visualization */}
-              <div className="flex-1 flex items-center gap-0.5 h-6">
-                {[40, 70, 30, 90, 50, 80, 100, 60, 40, 90, 70, 50, 80, 40, 60, 30].map(
-                  (height, idx) => (
-                    <span
-                      key={idx}
-                      style={{ height: `${height}%` }}
-                      className={`w-1 rounded-full transition-all ${
-                        isPlayingAudio && idx < 8
-                          ? isMe
-                            ? "bg-slate-950"
-                            : "bg-[#00E676]"
-                          : isMe
-                          ? "bg-slate-900/40"
-                          : "bg-slate-700/60"
-                      }`}
-                    />
-                  )
-                )}
-              </div>
-
-              {/* Playback speed toggle */}
-              <button
-                onClick={() =>
-                  setPlaybackSpeed((prev) =>
-                    prev === 1 ? 1.5 : prev === 1.5 ? 2 : 1
-                  )
-                }
-                className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-black/20 hover:bg-black/30 transition"
-              >
-                {playbackSpeed}x
-              </button>
-            </div>
+          <div className="space-y-2 min-w-[240px]">
+            <VoiceWaveformPlayer
+              mediaUrl={message.mediaUrl}
+              duration={message.audioDuration || 12}
+              isMe={isMe}
+            />
 
             {/* Automatic Audio Transcript Display */}
             {message.audioTranscript ? (
@@ -376,8 +350,19 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           </button>
         )}
 
-        {/* Time & Status Read Bar */}
+        {/* Time & Status Read Bar & Sentiment Indicator */}
         <div className="flex items-center justify-end gap-1.5 mt-1 text-[10px] opacity-80 shrink-0 select-none">
+          {/* Sentiment Emoji Badge from Gemini */}
+          {sentimentData && sentimentData.sentiment !== "neutral" && (
+            <span
+              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-950/60 border border-white/10 text-[10px] text-slate-200 backdrop-blur-xs transition hover:scale-105 cursor-help"
+              title={`Sentimiento detectado por Gemini: ${sentimentData.label} (${sentimentData.emoji})${sentimentData.explanation ? ' - ' + sentimentData.explanation : ''}`}
+            >
+              <span>{sentimentData.emoji}</span>
+              <span className="text-[9px] font-medium opacity-90">{sentimentData.label}</span>
+            </span>
+          )}
+
           {message.isStarred && <Star className="w-3 h-3 text-amber-300 fill-current" />}
           <span>{message.createdAt}</span>
 

@@ -4,6 +4,9 @@ import { ThemeMode, BubbleStyle, NotificationSettings, LanguageCode, UserProfile
 import { SoundSettingsSection } from "./SoundSettingsSection";
 import { AppUsageStats } from "./AppUsageStats";
 import { storageService, ACCENT_COLOR_MAP } from "../../services/storageService";
+import { webAuthnService } from "../../services/webAuthnService";
+import { DailyDigestModal } from "./DailyDigestModal";
+import { QuickRepliesModal } from "./QuickRepliesModal";
 import {
   Settings as SettingsIcon,
   X,
@@ -37,6 +40,9 @@ import {
   Trash2,
   RefreshCw,
   Cloud,
+  Fingerprint,
+  MessageSquare,
+  FileText,
 } from "lucide-react";
 import { StorageCleanerModal } from "./StorageCleanerModal";
 
@@ -120,6 +126,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [currentTimeStr, setCurrentTimeStr] = useState<string>("");
   const [isCurrentDay, setIsCurrentDay] = useState<boolean>(true);
   const [showStorageCleaner, setShowStorageCleaner] = useState<boolean>(false);
+  const [showDailyDigest, setShowDailyDigest] = useState<boolean>(false);
+  const [showQuickReplies, setShowQuickReplies] = useState<boolean>(false);
+
+  // Biometric WebAuthn status
+  const [isBioSupported, setIsBioSupported] = useState<boolean>(true);
+  const [isBioEnrolled, setIsBioEnrolled] = useState<boolean>(false);
+  const [isBioPreferred, setIsBioPreferred] = useState<boolean>(true);
+  const [bioNotice, setBioNotice] = useState<string>("");
 
   useEffect(() => {
     if (isOpen) {
@@ -127,6 +141,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const paletteInfo = storageService.calculateTimeOfDayPalette();
       setIsCurrentDay(paletteInfo.isDay);
       setCurrentTimeStr(paletteInfo.timeString);
+
+      setIsBioSupported(webAuthnService.isWebAuthnSupported());
+      setIsBioEnrolled(webAuthnService.isBiometricEnrolled());
+      setIsBioPreferred(webAuthnService.isBiometricPreferred());
 
       const timer = setInterval(() => {
         const info = storageService.calculateTimeOfDayPalette();
@@ -136,6 +154,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return () => clearInterval(timer);
     }
   }, [isOpen]);
+
+  const handleTestBiometrics = async () => {
+    setBioNotice("Activando sensor biométrico WebAuthn...");
+    try {
+      const res = await webAuthnService.authenticateWithBiometrics();
+      if (res.success) {
+        setBioNotice("✅ " + (res.message || "Identidad biométrica confirmada con éxito."));
+      } else {
+        setBioNotice("❌ " + (res.message || "Fallo en la autenticación."));
+      }
+    } catch (e: any) {
+      setBioNotice("❌ Error al acceder al sensor biométrico.");
+    }
+    setTimeout(() => setBioNotice(""), 4000);
+  };
+
+  const handleRegisterBiometrics = async () => {
+    setBioNotice("Vinculando sensor biométrico WebAuthn...");
+    try {
+      const res = await webAuthnService.registerBiometricCredential("user_vault_primary", "Usuario Bóveda Secreta");
+      if (res.success) {
+        setIsBioEnrolled(true);
+        setBioNotice("✅ " + (res.message || "Biometría registrada en este dispositivo."));
+      } else {
+        setBioNotice("❌ " + (res.message || "No se pudo vincular la biometría."));
+      }
+    } catch (e: any) {
+      setBioNotice("❌ Error al registrar credencial biométrica.");
+    }
+    setTimeout(() => setBioNotice(""), 4000);
+  };
 
   useEffect(() => {
     if (currentUser) {
@@ -466,6 +515,135 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         )}
 
+        {/* Degv's AI & Productivity Suite */}
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-950 to-cyan-950/30 border border-[#00E676]/30 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-xl bg-[#00E676]/20 text-[#00E676]">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-xs font-black text-slate-100 flex items-center gap-1.5">
+                  <span>Degv's AI & Productividad</span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#00E676] text-slate-950 font-mono font-black uppercase">
+                    Gemini 3.7
+                  </span>
+                </h3>
+                <p className="text-[10px] text-slate-400">
+                  Resúmenes inteligentes y atajos de mensajería rápida
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* Daily Digest Button */}
+            <button
+              onClick={() => setShowDailyDigest(true)}
+              className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-[#00E676]/60 text-left transition group active:scale-95"
+            >
+              <div className="flex items-center justify-between mb-1">
+                <FileText className="w-4 h-4 text-[#00E676] group-hover:scale-110 transition-transform" />
+                <span className="text-[9px] font-mono text-emerald-400 font-bold">24h Report</span>
+              </div>
+              <p className="text-xs font-bold text-slate-100">Resumen Diario</p>
+              <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">
+                Reporte sintético con tareas y acuerdos clave de las últimas 24h.
+              </p>
+            </button>
+
+            {/* Quick Replies Manager Button */}
+            <button
+              onClick={() => setShowQuickReplies(true)}
+              className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-amber-400/60 text-left transition group active:scale-95"
+            >
+              <div className="flex items-center justify-between mb-1">
+                <Zap className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
+                <span className="text-[9px] font-mono text-amber-400 font-bold">Atajos /</span>
+              </div>
+              <p className="text-xs font-bold text-slate-100">Respuestas Rápidas</p>
+              <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">
+                Personaliza atajos frecuentes para enviar con un solo toque.
+              </p>
+            </button>
+          </div>
+        </div>
+
+        {/* Biometric WebAuthn Security Section */}
+        <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-xl bg-indigo-500/20 text-indigo-400">
+                <Fingerprint className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-xs font-extrabold text-slate-100 flex items-center gap-1.5">
+                  <span>Autenticación Biométrica</span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-500/30 font-mono font-bold uppercase">
+                    WebAuthn API
+                  </span>
+                </h3>
+                <p className="text-[10px] text-slate-400">
+                  Desbloqueo de Bóveda Secreta con Huella / Face ID / Windows Hello
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800/80 space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-300 text-[11px]">Soporte WebAuthn en Dispositivo:</span>
+              <span className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded ${isBioSupported ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'bg-rose-950 text-rose-300 border border-rose-500/30'}`}>
+                {isBioSupported ? 'Disponible' : 'No soportado'}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-slate-300 text-[11px]">Credencial Vinculada:</span>
+              <span className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded ${isBioEnrolled ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                {isBioEnrolled ? 'Registrada' : 'Sin registrar'}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 border-t border-slate-800">
+              <span className="text-slate-300 text-[11px]">Modo Biométrico Preferido:</span>
+              <button
+                onClick={() => {
+                  const next = !isBioPreferred;
+                  setIsBioPreferred(next);
+                  webAuthnService.setBiometricPreferred(next);
+                }}
+                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded transition ${isBioPreferred ? 'bg-[#00E676] text-slate-950' : 'bg-slate-800 text-slate-400'}`}
+              >
+                {isBioPreferred ? 'Activado' : 'Desactivado'}
+              </button>
+            </div>
+
+            {bioNotice && (
+              <p className="text-[11px] font-semibold text-cyan-300 pt-1 animate-pulse">
+                {bioNotice}
+              </p>
+            )}
+
+            <div className="flex gap-2 pt-1.5">
+              <button
+                type="button"
+                onClick={handleRegisterBiometrics}
+                className="flex-1 py-1.5 px-2.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-200 font-bold text-[11px] transition text-center"
+              >
+                {isBioEnrolled ? 'Re-vincular Sensor' : 'Vincular Sensor'}
+              </button>
+              <button
+                type="button"
+                onClick={handleTestBiometrics}
+                className="flex-1 py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] transition text-center"
+              >
+                Probar Sensor
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Offline Cache Status Monitor */}
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs">
           <div className="flex items-center justify-between">
@@ -771,6 +949,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         onStorageCleared={() => {
           setCacheStats(storageService.getCacheStats());
         }}
+      />
+
+      {/* Daily Digest Modal */}
+      <DailyDigestModal
+        isOpen={showDailyDigest}
+        onClose={() => setShowDailyDigest(false)}
+      />
+
+      {/* Quick Replies Manager Modal */}
+      <QuickRepliesModal
+        isOpen={showQuickReplies}
+        onClose={() => setShowQuickReplies(false)}
       />
     </div>
   );

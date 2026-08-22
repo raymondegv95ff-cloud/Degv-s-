@@ -353,6 +353,44 @@ class IndexedDbQueueService {
   }
 
   /**
+   * Clear all queued messages for a specific room
+   */
+  public async clearQueueForRoom(roomId: string): Promise<void> {
+    try {
+      const db = await this.initDB();
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const getAllReq = store.getAll();
+
+      getAllReq.onsuccess = () => {
+        const items: QueuedMessageItem[] = getAllReq.result || [];
+        items.forEach((item) => {
+          if (item.roomId === roomId || item.conversationId === roomId) {
+            store.delete(item.clientMessageId);
+          }
+        });
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+
+      try {
+        const raw = localStorage.getItem("degvs_offline_queue_fallback");
+        if (raw) {
+          const list = JSON.parse(raw).filter((item: any) => item.roomId !== roomId && item.conversationId !== roomId);
+          localStorage.setItem("degvs_offline_queue_fallback", JSON.stringify(list));
+        }
+      } catch {}
+
+      this.notifyListeners();
+    } catch (err) {
+      console.warn("[Messenger][QUEUE] Notice clearing queue for room:", err);
+    }
+  }
+
+  /**
    * Clear entire queue (manual debug or account wipe)
    */
   public async clearQueue(): Promise<void> {

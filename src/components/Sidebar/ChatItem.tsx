@@ -40,18 +40,17 @@ export const ChatItem: React.FC<ChatItemProps> = ({
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    if (!isAi) {
-      setShowMenu(true);
-    }
+    setShowMenu(true);
   };
 
   if (isAi) {
     return (
-      <div className="px-1 py-1">
+      <div className="px-1 py-1 relative">
         <div
           onClick={() => onSelectRoom(room.id)}
+          onContextMenu={handleContextMenu}
           id={`chat-item-${room.id}`}
-          className={`bg-[#00E676]/10 border border-[#00E676]/20 rounded-2xl p-3 flex items-center gap-3 cursor-pointer transition-all ring-1 ring-[#00E676]/30 ${
+          className={`bg-[#00E676]/10 border border-[#00E676]/20 rounded-2xl p-3 flex items-center gap-3 cursor-pointer transition-all ring-1 ring-[#00E676]/30 group ${
             isActive ? "bg-[#00E676]/20 ring-[#00E676]/50 shadow-[0_0_15px_rgba(0,230,118,0.2)]" : "hover:bg-[#00E676]/15"
           }`}
         >
@@ -65,11 +64,43 @@ export const ChatItem: React.FC<ChatItemProps> = ({
                 Fijado
               </span>
             </div>
-            <p className="text-xs text-slate-300 truncate">
-              {room.draftText ? `Borrador: ${room.draftText}` : room.lastMessage || "¿En qué puedo ayudarte hoy?"}
-            </p>
+            <div className="flex justify-between items-center">
+              <p className="text-xs text-slate-300 truncate pr-2">
+                {room.draftText ? `Borrador: ${room.draftText}` : room.lastMessage || "¿En qué puedo ayudarte hoy?"}
+              </p>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMenu(!showMenu);
+                }}
+                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#00E676]/20 rounded-lg text-emerald-400 hover:text-emerald-200 transition shrink-0"
+                title="Opciones de chat"
+              >
+                <MoreVertical className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         </div>
+
+        {/* Context Dropdown Menu for AI */}
+        {showMenu && (
+          <div
+            ref={menuRef}
+            className="absolute right-3 top-12 z-30 w-48 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-1.5 text-xs text-slate-200 animate-in fade-in duration-100 space-y-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => {
+                setShowMenu(false);
+                if (onDeleteChat) onDeleteChat(room.id);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 rounded-xl transition text-left font-medium"
+            >
+              <Trash2 className="w-4 h-4 text-rose-500" />
+              <span>Vaciar / Eliminar Chat</span>
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -145,6 +176,7 @@ export const ChatItem: React.FC<ChatItemProps> = ({
                 setShowMenu(!showMenu);
               }}
               className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition"
+              title="Más opciones"
             >
               <MoreVertical className="w-3.5 h-3.5" />
             </button>
@@ -217,6 +249,20 @@ export const ChatItem: React.FC<ChatItemProps> = ({
               </div>
             )}
           </div>
+
+          <div className="my-1 border-t border-slate-800" />
+
+          {/* Delete Chat */}
+          <button
+            onClick={() => {
+              setShowMenu(false);
+              if (onDeleteChat) onDeleteChat(room.id);
+            }}
+            className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 rounded-xl transition text-left font-medium"
+          >
+            <Trash2 className="w-4 h-4 text-rose-500" />
+            <span>Eliminar Chat</span>
+          </button>
         </div>
       )}
     </div>

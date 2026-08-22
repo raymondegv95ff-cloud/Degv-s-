@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Room, SentimentAnalysis, Message } from "../../types";
 import { storageService } from "../../services/storageService";
-import { X, Phone, ShieldCheck, Image as ImageIcon, FileText, Music, Sparkles, Users, Lock, Clock, KeyRound, Download, ExternalLink } from "lucide-react";
+import { X, Phone, ShieldCheck, Image as ImageIcon, FileText, Music, Sparkles, Users, Lock, Clock, KeyRound, Download, ExternalLink, Trash2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 
 interface ViewContactDrawerProps {
@@ -10,6 +10,7 @@ interface ViewContactDrawerProps {
   room: Room;
   onUpdateDisappearingTimer?: (timer: "off" | "24h" | "7d" | "90d") => void;
   onOpenLockSetup?: () => void;
+  onDeleteChat?: (roomId: string) => void;
 }
 
 export const ViewContactDrawer: React.FC<ViewContactDrawerProps> = ({
@@ -18,6 +19,7 @@ export const ViewContactDrawer: React.FC<ViewContactDrawerProps> = ({
   room,
   onUpdateDisappearingTimer,
   onOpenLockSetup,
+  onDeleteChat,
 }) => {
   const [activeTab, setActiveTab] = useState<"media" | "sentiment">("media");
   const [mediaFilter, setMediaFilter] = useState<"all" | "images" | "files" | "audio">("all");
@@ -429,11 +431,26 @@ export const ViewContactDrawer: React.FC<ViewContactDrawerProps> = ({
         )}
       </div>
 
-      {/* Footer */}
-      <div className="pt-4 border-t border-slate-800 text-center">
-        <span className="text-[10px] font-mono text-slate-500">
-          ID de Sala: {room.id}
-        </span>
+      {/* Footer & Danger Zone */}
+      <div className="pt-4 border-t border-slate-800 space-y-3">
+        {onDeleteChat && (
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              onDeleteChat(room.id);
+            }}
+            className="w-full py-2.5 px-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-2 transition active:scale-95"
+          >
+            <Trash2 className="w-4 h-4 text-rose-500" />
+            <span>Eliminar esta conversación</span>
+          </button>
+        )}
+        <div className="text-center">
+          <span className="text-[10px] font-mono text-slate-500">
+            ID de Sala: {room.id}
+          </span>
+        </div>
       </div>
     </div>
   );

@@ -11,6 +11,7 @@ import {
   getPrivateConversationId,
   flushMessageQueue,
   listenForConversationMessages,
+  deleteConversation,
 } from "./services/messengerService";
 import {
   db,
@@ -75,6 +76,7 @@ import { SupportBotModal } from "./components/Modals/SupportBotModal";
 import { StorageCleanerModal } from "./components/Modals/StorageCleanerModal";
 import { PlatformUpdateModal } from "./components/Modals/PlatformUpdateModal";
 import { OracleCloudModal } from "./components/Modals/OracleCloudModal";
+import { DeleteChatModal } from "./components/Modals/DeleteChatModal";
 import { SmartReplyService } from "./services/smartReplyService";
 import { platformUpdateService } from "./services/platformUpdateService";
 import { CrossPlatformUpdateState } from "./types";
@@ -133,6 +135,7 @@ export const App: React.FC = () => {
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isStorageCleanerOpen, setIsStorageCleanerOpen] = useState(false);
   const [isStarredModalOpen, setIsStarredModalOpen] = useState(false);
+  const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [forwardMessage, setForwardMessage] = useState<Message | null>(null);
   const [firestoreUsers, setFirestoreUsers] = useState<UserProfile[]>([]);
 
@@ -1399,15 +1402,59 @@ export const App: React.FC = () => {
     storageService.saveMessage(activeChatId, pollMessage);
   };
 
-  // Delete Chat Handler
+  // Delete Chat Handler with Safety Confirmation
   const handleDeleteChat = (roomId: string) => {
+    const target = rooms.find((r) => r.id === roomId);
+    if (target) {
+      setRoomToDelete(target);
+    }
+  };
+
+  const handleConfirmDeleteChat = async () => {
+    if (!roomToDelete) return;
+    const roomId = roomToDelete.id;
+    const roomName = roomToDelete.name;
+
+    // 1. Remove from local rooms and message state
     setRooms((prev) => prev.filter((r) => r.id !== roomId));
+    setMessagesMap((prev) => {
+      const next = { ...prev };
+      delete next[roomId];
+      return next;
+    });
+
+    // 2. Remove from LocalStorage and offline cache
     storageService.deleteRoom(roomId);
+
+    // 3. Remove from IndexedDB Queue
+    await indexedDbQueueService.clearQueueForRoom(roomId);
+
+    // 4. Remove from Firestore backend
+    deleteConversation(roomId).catch((err) => {
+      console.warn("[Firestore] Deletion notice:", err);
+    });
+
+    // 5. Update activeChatId if the deleted chat was selected
     if (activeChatId === roomId) {
       const remaining = rooms.filter((r) => r.id !== roomId);
-      setActiveChatId(remaining[0]?.id || null);
-      if (remaining.length === 0) setShowMobileChat(false);
+      if (remaining.length > 0) {
+        setActiveChatId(remaining[0].id);
+      } else {
+        setActiveChatId(null);
+        setShowMobileChat(false);
+      }
     }
+
+    if (isContactDrawerOpen) {
+      setIsContactDrawerOpen(false);
+    }
+
+    setSyncToastMessage(`Conversación con "${roomName}" eliminada.`);
+    setTimeout(() => {
+      setSyncToastMessage(null);
+    }, 3500);
+
+    setRoomToDelete(null);
   };
 
   // Export Chat JSON Handler
@@ -1871,6 +1918,7 @@ export const App: React.FC = () => {
             setIsContactDrawerOpen(false);
             setIsLockSetupModalOpen(true);
           }}
+          onDeleteChat={handleDeleteChat}
         />
       )}
 
@@ -2148,6 +2196,15 @@ export const App: React.FC = () => {
         messageToForward={forwardMessage}
         rooms={rooms}
         onForwardToRoom={handleForwardToRoom}
+      />
+
+      {/* Safety Confirmation Modal for Deleting Chats */}
+      <DeleteChatModal
+        isOpen={!!roomToDelete}
+        room={roomToDelete}
+        messagesCount={roomToDelete ? (messagesMap[roomToDelete.id]?.length || 0) : 0}
+        onClose={() => setRoomToDelete(null)}
+        onConfirm={handleConfirmDeleteChat}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { Room, Message, UserProfile, ThemeMode, BubbleStyle, NotificationSettings, UserStatusItem, SoundCustomizationSettings, CustomSoundItem, AccentColorOption, CacheStats, DayNightPaletteSettings } from "../types";
+import { Room, Message, UserProfile, ThemeMode, BubbleStyle, NotificationSettings, UserStatusItem, SoundCustomizationSettings, CustomSoundItem, AccentColorOption, CacheStats, DayNightPaletteSettings, QuickReplyItem } from "../types";
 import { currentUserMock, initialMockRooms, initialMockMessages, mockUsersList } from "./mockData";
 
 const STORAGE_KEYS = {
@@ -25,6 +25,7 @@ const STORAGE_KEYS = {
   CALL_LOGS: "degvs_messenger_call_logs",
   CUSTOM_STICKERS: "degvs_messenger_custom_stickers",
   CACHE_METADATA: "degvs_messenger_cache_metadata",
+  QUICK_REPLIES: "degvs_messenger_quick_replies",
 };
 
 
@@ -751,6 +752,72 @@ export class StorageService {
       this.notifySync();
     }
   }
+
+  // Quick replies static methods
+  public static getQuickReplies(): QuickReplyItem[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.QUICK_REPLIES);
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.error("Error reading quick replies:", e);
+    }
+    const defaults: QuickReplyItem[] = [
+      { id: "qr_1", shortcut: "/hola", text: "¡Hola! ¿Cómo estás?", category: "general" },
+      { id: "qr_2", shortcut: "/gracias", text: "¡Muchas gracias por la información!", category: "general" },
+      { id: "qr_3", shortcut: "/ok", text: "Entendido, perfecto.", category: "general" },
+      { id: "qr_4", shortcut: "/camino", text: "Voy en camino, llego en unos minutos.", category: "personal" },
+      { id: "qr_5", shortcut: "/reunion", text: "Estoy en una reunión, te escribo en cuanto me desocupe.", category: "trabajo" },
+      { id: "qr_6", shortcut: "/llamame", text: "¿Puedes llamarme en cuanto tengas un momento?", category: "urgente" },
+      { id: "qr_7", shortcut: "/soporte", text: "Por favor revisa el detalle y me avisas.", category: "trabajo" },
+    ];
+    localStorage.setItem(STORAGE_KEYS.QUICK_REPLIES, JSON.stringify(defaults));
+    return defaults;
+  }
+
+  public static saveQuickReplies(items: QuickReplyItem[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.QUICK_REPLIES, JSON.stringify(items));
+      this.notifySync();
+    } catch (e) {
+      console.error("Error saving quick replies:", e);
+    }
+  }
+
+  public static addQuickReply(item: Omit<QuickReplyItem, "id" | "createdAt">): QuickReplyItem {
+    const all = this.getQuickReplies();
+    let shortcut = item.shortcut.trim();
+    if (!shortcut.startsWith("/")) {
+      shortcut = `/${shortcut}`;
+    }
+    const newItem: QuickReplyItem = {
+      id: `qr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      shortcut,
+      text: item.text.trim(),
+      category: item.category || "general",
+      createdAt: Date.now(),
+    };
+    all.push(newItem);
+    this.saveQuickReplies(all);
+    return newItem;
+  }
+
+  public static updateQuickReply(item: QuickReplyItem): void {
+    const all = this.getQuickReplies();
+    let shortcut = item.shortcut.trim();
+    if (!shortcut.startsWith("/")) {
+      shortcut = `/${shortcut}`;
+    }
+    const updated = all.map((q) => (q.id === item.id ? { ...item, shortcut } : q));
+    this.saveQuickReplies(updated);
+  }
+
+  public static deleteQuickReply(id: string): void {
+    const all = this.getQuickReplies();
+    const filtered = all.filter((q) => q.id !== id);
+    this.saveQuickReplies(filtered);
+  }
 }
 
 export const storageService = {
@@ -763,6 +830,7 @@ export const storageService = {
     StorageService.saveRooms([room, ...rooms.filter(r => r.id !== room.id)]);
   },
   deleteRoom: (roomId: string) => StorageService.deleteRoom(roomId),
+  getAllMessagesMap: () => StorageService.getAllMessagesMap(),
   getMessages: (roomId: string) => StorageService.getMessages(roomId),
   saveMessage: (roomId: string, msg: any) => StorageService.sendMessage(roomId, msg),
   saveMessages: (roomId: string, msgs: Message[]) => StorageService.saveRoomMessages(roomId, msgs),
@@ -796,6 +864,11 @@ export const storageService = {
     StorageService.addCustomFolder(f);
     return StorageService.getCustomFolders();
   },
+  getQuickReplies: () => StorageService.getQuickReplies(),
+  saveQuickReplies: (items: QuickReplyItem[]) => StorageService.saveQuickReplies(items),
+  addQuickReply: (item: Omit<QuickReplyItem, "id" | "createdAt">) => StorageService.addQuickReply(item),
+  updateQuickReply: (item: QuickReplyItem) => StorageService.updateQuickReply(item),
+  deleteQuickReply: (id: string) => StorageService.deleteQuickReply(id),
   getSoundSettings: () => StorageService.getSoundSettings(),
   saveSoundSettings: (settings: Partial<SoundCustomizationSettings>) => StorageService.saveSoundSettings(settings),
   addCustomSound: (item: CustomSoundItem) => StorageService.addCustomSound(item),

@@ -6,6 +6,7 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  deleteDoc,
   collection,
   query,
   orderBy,
@@ -675,6 +676,47 @@ export async function flushMessageQueue(): Promise<{ synced: number; failed: num
     synced: result.syncedCount,
     failed: result.failedCount,
   };
+}
+
+/**
+ * Delete a conversation and its messages from Firestore and IndexedDB
+ */
+export async function deleteConversation(conversationId: string): Promise<boolean> {
+  try {
+    console.log(`[Messenger][DELETE] 🗑️ Deleting conversation '${conversationId}'...`);
+    
+    // 1. Delete room document in Firestore
+    try {
+      const roomRef = doc(db, "rooms", conversationId);
+      await deleteDoc(roomRef);
+    } catch (e: any) {
+      console.warn("[Messenger][DELETE] Room doc deletion notice:", e?.message || e);
+    }
+
+    // 2. Fetch and delete messages in subcollection /conversations/{conversationId}/messages
+    try {
+      const msgsCol = collection(db, "conversations", conversationId, "messages");
+      const snap = await getDocs(msgsCol);
+      if (!snap.empty) {
+        const batch = writeBatch(db);
+        snap.docs.forEach((d) => {
+          batch.delete(d.ref);
+        });
+        await batch.commit();
+      }
+    } catch (e: any) {
+      console.warn("[Messenger][DELETE] Subcollection messages deletion notice:", e?.message || e);
+    }
+
+    // 3. Clear IndexedDB queue for this conversation
+    await indexedDbQueueService.clearQueueForRoom(conversationId);
+
+    console.log(`[Messenger][DELETE] ✅ Successfully deleted conversation '${conversationId}'`);
+    return true;
+  } catch (err) {
+    console.error(`[Messenger][DELETE] Error deleting conversation '${conversationId}':`, err);
+    return false;
+  }
 }
 
 // Auto-attach online listener to trigger queue flush

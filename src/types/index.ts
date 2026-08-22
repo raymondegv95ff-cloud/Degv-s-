@@ -80,6 +80,44 @@ export interface PollData {
   allowsMultiple?: boolean;
 }
 
+export type MessageSentiment = "joy" | "doubt" | "urgency" | "neutral" | "anger" | "sadness" | "love" | "idea";
+
+export interface MessageSentimentData {
+  sentiment: MessageSentiment;
+  emoji: string;
+  label: string;
+  confidence?: number;
+  explanation?: string;
+}
+
+export interface QuickReplyItem {
+  id: string;
+  shortcut: string; // e.g. "/gracias", "/reunion", "/voy"
+  text: string;     // e.g. "¡Muchas gracias por la información!", "Entendido, voy en camino."
+  category?: "general" | "trabajo" | "personal" | "urgente";
+  createdAt?: number;
+}
+
+export interface DailyDigestHighlight {
+  roomName: string;
+  senderName?: string;
+  highlight: string;
+  urgencyLevel?: "alta" | "media" | "normal";
+  time?: string;
+}
+
+export interface DailyDigestData {
+  generatedAt: number;
+  period: string; // e.g. "Últimas 24 horas"
+  totalMessagesAnalyzed: number;
+  activeRoomsCount: number;
+  executiveSummary: string;
+  keyHighlights: DailyDigestHighlight[];
+  pendingActionItems: string[];
+  overallTone: string;
+  topParticipants: string[];
+}
+
 export interface Message {
   id: string;
   roomId: string;
@@ -122,6 +160,7 @@ export interface Message {
   isEphemerous?: boolean;
   reactions?: Reaction[];
   translatedText?: string;
+  sentiment?: MessageSentimentData;
   status?: "pending" | "sending" | "sent" | "delivered" | "read" | "failed" | "queued";
   clientMessageId?: string;
   updatedAt?: any;
