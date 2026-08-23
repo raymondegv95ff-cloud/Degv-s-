@@ -1,4 +1,4 @@
-import { Room, Message, UserProfile, ThemeMode, BubbleStyle, NotificationSettings, UserStatusItem, SoundCustomizationSettings, CustomSoundItem, AccentColorOption, CacheStats, DayNightPaletteSettings, QuickReplyItem } from "../types";
+import { Room, Message, UserProfile, ThemeMode, BubbleStyle, NotificationSettings, UserStatusItem, SoundCustomizationSettings, CustomSoundItem, AccentColorOption, CacheStats, DayNightPaletteSettings, QuickReplyItem, AutoPurgeConfig, AutoPurgeReport } from "../types";
 import { currentUserMock, initialMockRooms, initialMockMessages, mockUsersList } from "./mockData";
 
 const STORAGE_KEYS = {
@@ -26,6 +26,9 @@ const STORAGE_KEYS = {
   CUSTOM_STICKERS: "degvs_messenger_custom_stickers",
   CACHE_METADATA: "degvs_messenger_cache_metadata",
   QUICK_REPLIES: "degvs_messenger_quick_replies",
+  AUTO_PURGE_CONFIG: "degvs_messenger_auto_purge_config",
+  LAST_AUTO_PURGE_REPORT: "degvs_messenger_last_auto_purge_report",
+  MUTED_ROOMS: "degvs_messenger_muted_rooms",
 };
 
 
@@ -202,6 +205,49 @@ export class StorageService {
   public static saveRooms(rooms: Room[]) {
     localStorage.setItem(STORAGE_KEYS.ROOMS, JSON.stringify(rooms));
     this.notifySync();
+  }
+
+  // Room Mute Status (Individual Conversation Sound Control)
+  public static getMutedRooms(): string[] {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.MUTED_ROOMS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  public static isRoomMuted(roomId: string): boolean {
+    if (!roomId) return false;
+    const mutedRooms = this.getMutedRooms();
+    if (mutedRooms.includes(roomId)) return true;
+    const rooms = this.getRooms();
+    const room = rooms.find((r) => r.id === roomId);
+    return !!room?.isMuted;
+  }
+
+  public static setRoomMuted(roomId: string, muted: boolean): void {
+    if (!roomId) return;
+    const mutedRooms = this.getMutedRooms();
+    let updatedMutedList: string[];
+    if (muted) {
+      updatedMutedList = Array.from(new Set([...mutedRooms, roomId]));
+    } else {
+      updatedMutedList = mutedRooms.filter((id) => id !== roomId);
+    }
+    localStorage.setItem(STORAGE_KEYS.MUTED_ROOMS, JSON.stringify(updatedMutedList));
+
+    // Update in cached rooms
+    const rooms = this.getRooms();
+    const updatedRooms = rooms.map((r) => (r.id === roomId ? { ...r, isMuted: muted } : r));
+    this.saveRooms(updatedRooms);
+  }
+
+  public static toggleRoomMute(roomId: string): boolean {
+    const isCurrentlyMuted = this.isRoomMuted(roomId);
+    const nextState = !isCurrentlyMuted;
+    this.setRoomMuted(roomId, nextState);
+    return nextState;
   }
 
   public static saveRoomDraft(roomId: string, draftText: string) {
@@ -412,7 +458,12 @@ export class StorageService {
     const updatedMsgs = roomMsgs.map(m => {
       if (!m.isRead && m.senderId !== userId) {
         hasChanges = true;
-        return { ...m, isRead: true, readBy: Array.from(new Set([...(m.readBy || []), userId])) };
+        return {
+          ...m,
+          isRead: true,
+          status: "read" as const,
+          readBy: Array.from(new Set([...(m.readBy || []), userId])),
+        };
       }
       return m;
     });
@@ -818,6 +869,208 @@ export class StorageService {
     const filtered = all.filter((q) => q.id !== id);
     this.saveQuickReplies(filtered);
   }
+
+  // Auto-Purge & Storage Cache Automated Task
+  public static getAutoPurgeConfig(): AutoPurgeConfig {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.AUTO_PURGE_CONFIG);
+      if (raw) {
+        return {
+          enabled: true,
+          maxAgeDays: 30,
+          purgeDeletedRooms: true,
+          purgeOrphanedMedia: true,
+          lastRunTimestamp: 0,
+          intervalHours: 24,
+          requireConfirmation: true,
+          ...JSON.parse(raw),
+        };
+      }
+    } catch {}
+    const defaultConfig: AutoPurgeConfig = {
+      enabled: true,
+      maxAgeDays: 30,
+      purgeDeletedRooms: true,
+      purgeOrphanedMedia: true,
+      lastRunTimestamp: 0,
+      intervalHours: 24,
+      requireConfirmation: true,
+    };
+    return defaultConfig;
+  }
+
+  public static saveAutoPurgeConfig(config: Partial<AutoPurgeConfig>): AutoPurgeConfig {
+    const current = this.getAutoPurgeConfig();
+    const updated = { ...current, ...config };
+    try {
+      localStorage.setItem(STORAGE_KEYS.AUTO_PURGE_CONFIG, JSON.stringify(updated));
+      this.notifySync();
+    } catch (e) {
+      console.error("Error saving auto purge config:", e);
+    }
+    return updated;
+  }
+
+  public static getLastAutoPurgeReport(): AutoPurgeReport | null {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.LAST_AUTO_PURGE_REPORT);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  }
+
+  public static scanPurgeCandidates(maxAgeDays?: number) {
+    const config = this.getAutoPurgeConfig();
+    const ageThresholdDays = maxAgeDays ?? config.maxAgeDays;
+    const now = Date.now();
+    const cutoffTimestamp = now - ageThresholdDays * 24 * 60 * 60 * 1000;
+
+    const allMsgsMap = this.getAllMessagesMap();
+    const activeRooms = this.getRooms();
+    const activeRoomIds = new Set(activeRooms.map((r) => r.id));
+
+    let messagesCount = 0;
+    let mediaFilesCount = 0;
+    let estimatedFreedBytes = 0;
+    const deletedRoomIds: string[] = [];
+
+    Object.entries(allMsgsMap).forEach(([roomId, msgs]) => {
+      const isDeletedRoom = !activeRoomIds.has(roomId);
+      if (isDeletedRoom) {
+        deletedRoomIds.push(roomId);
+      }
+
+      if (Array.isArray(msgs)) {
+        msgs.forEach((m) => {
+          const mTime = m.timestamp || (m.createdAt ? new Date(m.createdAt).getTime() : now);
+          const isExpired = mTime < cutoffTimestamp;
+
+          if (isDeletedRoom || isExpired) {
+            messagesCount++;
+            if (m.mediaUrl && !m.mediaUrl.startsWith("purged_")) {
+              mediaFilesCount++;
+              if (m.mediaUrl.startsWith("data:")) {
+                const b64 = m.mediaUrl.split(",")[1] || "";
+                estimatedFreedBytes += Math.round((b64.length * 3) / 4);
+              } else {
+                estimatedFreedBytes += 200 * 1024; // estimate 200KB for media attachment
+              }
+            } else if (m.content) {
+              estimatedFreedBytes += m.content.length * 2;
+            }
+          }
+        });
+      }
+    });
+
+    const formatBytes = (bytes: number) => {
+      if (bytes === 0) return "0 B";
+      const k = 1024;
+      const sizes = ["B", "KB", "MB", "GB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+    };
+
+    return {
+      messagesCount,
+      mediaFilesCount,
+      orphanedRoomsCount: deletedRoomIds.length,
+      deletedRoomIds,
+      estimatedFreedBytes,
+      estimatedFreedFormatted: formatBytes(estimatedFreedBytes),
+      cutoffDate: new Date(cutoffTimestamp).toLocaleDateString(),
+    };
+  }
+
+  public static async executeAutoPurge(options?: {
+    maxAgeDays?: number;
+    purgeDeletedRooms?: boolean;
+    purgeOrphanedMedia?: boolean;
+  }): Promise<AutoPurgeReport> {
+    const config = this.getAutoPurgeConfig();
+    const ageDays = options?.maxAgeDays ?? config.maxAgeDays;
+    const purgeDeletedRooms = options?.purgeDeletedRooms ?? config.purgeDeletedRooms;
+    const now = Date.now();
+    const cutoffTimestamp = now - ageDays * 24 * 60 * 60 * 1000;
+
+    const allMsgsMap = this.getAllMessagesMap();
+    const activeRooms = this.getRooms();
+    const activeRoomIds = new Set(activeRooms.map((r) => r.id));
+
+    let messagesRemoved = 0;
+    let mediaFilesRemoved = 0;
+    let roomsCleaned = 0;
+    let freedBytes = 0;
+    const updatedMap: Record<string, Message[]> = {};
+
+    Object.entries(allMsgsMap).forEach(([roomId, msgs]) => {
+      const isDeletedRoom = !activeRoomIds.has(roomId);
+
+      if (isDeletedRoom && purgeDeletedRooms) {
+        roomsCleaned++;
+        if (Array.isArray(msgs)) {
+          messagesRemoved += msgs.length;
+          msgs.forEach((m) => {
+            if (m.mediaUrl && !m.mediaUrl.startsWith("purged_")) {
+              mediaFilesRemoved++;
+              freedBytes += m.mediaUrl.startsWith("data:") ? Math.round((m.mediaUrl.length * 3) / 4) : 200 * 1024;
+            } else if (m.content) {
+              freedBytes += m.content.length * 2;
+            }
+          });
+        }
+        return; // Exclude deleted room completely
+      }
+
+      if (Array.isArray(msgs)) {
+        const keptMsgs: Message[] = [];
+        msgs.forEach((m) => {
+          const mTime = m.timestamp || (m.createdAt ? new Date(m.createdAt).getTime() : now);
+          const isExpired = mTime < cutoffTimestamp;
+
+          if (isExpired) {
+            messagesRemoved++;
+            if (m.mediaUrl && !m.mediaUrl.startsWith("purged_")) {
+              mediaFilesRemoved++;
+              freedBytes += m.mediaUrl.startsWith("data:") ? Math.round((m.mediaUrl.length * 3) / 4) : 200 * 1024;
+            } else if (m.content) {
+              freedBytes += m.content.length * 2;
+            }
+          } else {
+            keptMsgs.push(m);
+          }
+        });
+        updatedMap[roomId] = keptMsgs;
+      }
+    });
+
+    this.saveAllMessagesMap(updatedMap);
+
+    const formatBytes = (bytes: number) => {
+      if (bytes === 0) return "0 B";
+      const k = 1024;
+      const sizes = ["B", "KB", "MB", "GB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+    };
+
+    const report: AutoPurgeReport = {
+      freedBytes,
+      freedFormatted: formatBytes(freedBytes),
+      messagesRemoved,
+      roomsCleaned,
+      mediaFilesRemoved,
+      timestamp: now,
+    };
+
+    this.saveAutoPurgeConfig({ lastRunTimestamp: now });
+    try {
+      localStorage.setItem(STORAGE_KEYS.LAST_AUTO_PURGE_REPORT, JSON.stringify(report));
+    } catch {}
+
+    this.notifySync();
+    return report;
+  }
 }
 
 export const storageService = {
@@ -830,6 +1083,10 @@ export const storageService = {
     StorageService.saveRooms([room, ...rooms.filter(r => r.id !== room.id)]);
   },
   deleteRoom: (roomId: string) => StorageService.deleteRoom(roomId),
+  isRoomMuted: (roomId: string) => StorageService.isRoomMuted(roomId),
+  setRoomMuted: (roomId: string, muted: boolean) => StorageService.setRoomMuted(roomId, muted),
+  toggleRoomMute: (roomId: string) => StorageService.toggleRoomMute(roomId),
+  getMutedRooms: () => StorageService.getMutedRooms(),
   getAllMessagesMap: () => StorageService.getAllMessagesMap(),
   getMessages: (roomId: string) => StorageService.getMessages(roomId),
   saveMessage: (roomId: string, msg: any) => StorageService.sendMessage(roomId, msg),
@@ -838,6 +1095,12 @@ export const storageService = {
   toggleStarMessage: (roomId: string, messageId: string) => StorageService.toggleStarMessage(roomId, messageId),
   markRoomAsRead: (roomId: string) => StorageService.markMessagesAsRead(roomId, StorageService.getCurrentUser()?.id || "usr_me"),
   saveDraft: (roomId: string, draftText: string) => StorageService.saveRoomDraft(roomId, draftText),
+  updateRoomWallpaper: (roomId: string, wallpaper: string) => StorageService.updateRoomWallpaper(roomId, wallpaper),
+  getAutoPurgeConfig: () => StorageService.getAutoPurgeConfig(),
+  saveAutoPurgeConfig: (cfg: Partial<AutoPurgeConfig>) => StorageService.saveAutoPurgeConfig(cfg),
+  getLastAutoPurgeReport: () => StorageService.getLastAutoPurgeReport(),
+  scanPurgeCandidates: (maxAgeDays?: number) => StorageService.scanPurgeCandidates(maxAgeDays),
+  executeAutoPurge: (options?: { maxAgeDays?: number; purgeDeletedRooms?: boolean; purgeOrphanedMedia?: boolean }) => StorageService.executeAutoPurge(options),
   getContacts: () => StorageService.getAllUsers(),
   saveContact: (c: UserProfile) => {
     try {

@@ -18,6 +18,25 @@ export interface CacheStats {
   cacheSizeKb?: number;
 }
 
+export interface AutoPurgeConfig {
+  enabled: boolean;
+  maxAgeDays: number; // e.g. 7, 14, 30, 90 days
+  purgeDeletedRooms: boolean;
+  purgeOrphanedMedia: boolean;
+  lastRunTimestamp: number;
+  intervalHours: number; // e.g. 24h
+  requireConfirmation: boolean;
+}
+
+export interface AutoPurgeReport {
+  freedBytes: number;
+  freedFormatted: string;
+  messagesRemoved: number;
+  roomsCleaned: number;
+  mediaFilesRemoved: number;
+  timestamp: number;
+}
+
 export interface DayNightPaletteSettings {
   autoTimePalette: boolean;
   accentColorLight: AccentColorOption;
@@ -175,6 +194,7 @@ export interface Room {
   isVaultSecret?: boolean;
   isSecretVault?: boolean;
   isLocked?: boolean;
+  isMuted?: boolean;
   pinCode?: string;
   disappearingTimer?: string | number;
   isArchived?: boolean;

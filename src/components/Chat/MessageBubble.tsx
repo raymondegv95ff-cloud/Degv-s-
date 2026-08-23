@@ -35,6 +35,7 @@ interface MessageBubbleProps {
   onTranscribeAudio: (message: Message) => void;
   onTranslateText: (message: Message) => void;
   readReceiptsEnabled?: boolean;
+  searchQueryInChat?: string;
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -50,6 +51,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   onTranscribeAudio,
   onTranslateText,
   readReceiptsEnabled = true,
+  searchQueryInChat = "",
 }) => {
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
@@ -58,6 +60,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [isAutoTranscribing, setIsAutoTranscribing] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [sentimentData, setSentimentData] = useState<MessageSentimentData | null>(message.sentiment || null);
+
+  const renderHighlightedText = (text: string, query?: string) => {
+    if (!query || !query.trim() || !text) return text;
+    const q = query.trim();
+    const parts = text.split(new RegExp(`(${q.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")})`, "gi"));
+    return parts.map((part, index) =>
+      part.toLowerCase() === q.toLowerCase() ? (
+        <mark
+          key={index}
+          className="bg-[#00E676] text-black font-black px-1 py-0.5 rounded shadow-[0_0_10px_rgba(0,230,118,0.6)]"
+        >
+          {part}
+        </mark>
+      ) : (
+        part
+      )
+    );
+  };
 
   // Analyze or retrieve message sentiment
   useEffect(() => {
@@ -228,7 +248,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         {message.type === "text" && (
           <div className="space-y-1">
             <p className="text-xs leading-relaxed whitespace-pre-wrap break-words">
-              {message.content}
+              {renderHighlightedText(message.content, searchQueryInChat)}
             </p>
 
             {/* Translated Text Box if present */}
@@ -238,7 +258,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <Globe className="w-3 h-3" />
                   <span>Traducción IA:</span>
                 </div>
-                <p className="italic">{message.translatedText}</p>
+                <p className="italic">{renderHighlightedText(message.translatedText, searchQueryInChat)}</p>
               </div>
             )}
           </div>
@@ -269,7 +289,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               )}
             </div>
             {message.content && message.type !== "sticker" && (
-              <p className="text-xs mt-1">{message.content}</p>
+              <p className="text-xs mt-1">{renderHighlightedText(message.content, searchQueryInChat)}</p>
             )}
           </div>
         )}
@@ -289,7 +309,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                 <p className="font-extrabold text-[10px] text-indigo-400 mb-0.5 flex items-center gap-1 uppercase tracking-wider">
                   <Sparkles className="w-3 h-3 text-[#00E676]" /> Transcripción Automática:
                 </p>
-                <p className="italic text-[11px] leading-relaxed text-slate-200">{message.audioTranscript}</p>
+                <p className="italic text-[11px] leading-relaxed text-slate-200">{renderHighlightedText(message.audioTranscript, searchQueryInChat)}</p>
               </div>
             ) : (
               <div className="p-2 rounded-xl bg-slate-950/40 text-slate-400 text-[11px] border border-white/5 flex items-center justify-center gap-1.5 animate-pulse">
@@ -304,7 +324,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         {message.type === "poll" && message.poll && (
           <div className="space-y-2 min-w-[240px]">
             <h4 className="font-bold text-xs tracking-tight border-b border-black/10 pb-1.5">
-              📊 {message.poll.question}
+              📊 {renderHighlightedText(message.poll.question, searchQueryInChat)}
             </h4>
 
             <div className="space-y-1.5">
@@ -324,7 +344,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       className="absolute inset-y-0 left-0 bg-[#00E676]/30 transition-all duration-300"
                     />
                     <div className="relative flex items-center justify-between text-xs font-medium">
-                      <span>{opt.text}</span>
+                      <span>{renderHighlightedText(opt.text, searchQueryInChat)}</span>
                       <span className="font-bold text-[11px] shrink-0 ml-2">
                         {percentage}% ({opt.votes.length})
                       </span>
@@ -367,29 +387,33 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           <span>{message.createdAt}</span>
 
           {isMe && (
-            <span>
+            <span className="inline-flex items-center ml-0.5">
               {message.status === "failed" ? (
                 <span title="Error de red - Se reintentará automáticamente">
                   <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
                 </span>
               ) : message.status === "sending" ? (
-                <span title="Enviando a Firestore...">
+                <span title="Enviando...">
                   <Clock className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
                 </span>
               ) : message.status === "pending" || message.status === "queued" ? (
                 <span title="En cola local (IndexedDB) - esperando conexión">
                   <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
                 </span>
-              ) : message.status === "read" || (message.isRead && readReceiptsEnabled !== false) ? (
-                <span title="Leído">
-                  <CheckCheck className="w-3.5 h-3.5 text-[#00E676]" />
+              ) : (message.status === "read" || message.isRead || (message.readBy && message.readBy.length > 0)) && readReceiptsEnabled !== false ? (
+                <span title="Visto y leído por el destinatario" className="flex items-center">
+                  <CheckCheck className="w-3.5 h-3.5 text-sky-400 drop-shadow-[0_0_6px_rgba(56,189,248,0.8)] transition-all duration-200" />
+                </span>
+              ) : (message.status === "read" || message.isRead || (message.readBy && message.readBy.length > 0)) && readReceiptsEnabled === false ? (
+                <span title="Confirmaciones de lectura desactivadas" className="flex items-center">
+                  <CheckCheck className="w-3.5 h-3.5 text-slate-400" />
                 </span>
               ) : message.status === "delivered" ? (
-                <span title="Entregado">
+                <span title="Entregado al dispositivo" className="flex items-center">
                   <CheckCheck className="w-3.5 h-3.5 text-slate-400" />
                 </span>
               ) : (
-                <span title="Enviado a Firestore">
+                <span title="Enviado al servidor" className="flex items-center">
                   <Check className="w-3.5 h-3.5 text-slate-400" />
                 </span>
               )}

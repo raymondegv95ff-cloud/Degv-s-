@@ -9,6 +9,10 @@ export class NotificationService {
     sound: true,
   };
 
+  // Debouncing tracking map per contact / room to prevent sound and notification spam in rapid succession
+  private static lastContactNotificationTimestamps: Map<string, number> = new Map();
+  private static readonly CONTACT_NOTIFICATION_DEBOUNCE_MS = 2500; // 2.5s debounce window per contact/conversation
+
   public static setSettings(newSettings: NotificationSettings) {
     this.settings = newSettings;
   }
@@ -45,14 +49,55 @@ export class NotificationService {
     return false;
   }
 
+  /**
+   * Check if a notification for a contact/room should proceed based on debouncing
+   */
+  public static canNotifyContact(contactKey: string, customWindowMs: number = this.CONTACT_NOTIFICATION_DEBOUNCE_MS): boolean {
+    if (!contactKey) return true;
+    const now = Date.now();
+    const lastTime = this.lastContactNotificationTimestamps.get(contactKey) || 0;
+    if (now - lastTime < customWindowMs) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Record that a notification was just triggered for a contact/room
+   */
+  public static markContactNotified(contactKey: string): void {
+    if (contactKey) {
+      this.lastContactNotificationTimestamps.set(contactKey, Date.now());
+    }
+  }
+
+  /**
+   * Clear debouncing state for a contact/room or all
+   */
+  public static clearDebounce(contactKey?: string): void {
+    if (contactKey) {
+      this.lastContactNotificationTimestamps.delete(contactKey);
+    } else {
+      this.lastContactNotificationTimestamps.clear();
+    }
+  }
+
   public static async sendNotification(
     title: string,
     body: string,
     roomId?: string,
-    type: "messages" | "calls" | "aiActivity" = "messages"
+    type: "messages" | "calls" | "aiActivity" = "messages",
+    senderId?: string
   ) {
     // Check user preference
     if (!this.settings[type]) return;
+
+    // Contact/Conversation Debounce Filter: Prevents barrage of alerts from the same contact in a short window
+    const debounceKey = senderId || roomId || title;
+    if (!this.canNotifyContact(debounceKey)) {
+      return;
+    }
+    this.markContactNotified(debounceKey);
 
     if (!this.isSupported() || Notification.permission !== "granted") {
       return;
@@ -103,11 +148,15 @@ export const notificationService = {
   isSupported: () => NotificationService.isSupported(),
   getPermissionState: () => NotificationService.getPermissionState(),
   requestPermission: () => NotificationService.requestPermission(),
+  canNotifyContact: (contactKey: string, customWindowMs?: number) => NotificationService.canNotifyContact(contactKey, customWindowMs),
+  markContactNotified: (contactKey: string) => NotificationService.markContactNotified(contactKey),
+  clearDebounce: (contactKey?: string) => NotificationService.clearDebounce(contactKey),
   sendNotification: (
     title: string,
     body: string,
     roomId?: string,
-    type?: "messages" | "calls" | "aiActivity"
-  ) => NotificationService.sendNotification(title, body, roomId, type),
+    type?: "messages" | "calls" | "aiActivity",
+    senderId?: string
+  ) => NotificationService.sendNotification(title, body, roomId, type, senderId),
   setSettings: (s: NotificationSettings) => NotificationService.setSettings(s),
 };

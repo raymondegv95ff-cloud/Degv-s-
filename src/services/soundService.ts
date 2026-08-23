@@ -4,6 +4,12 @@ import { storageService } from "./storageService";
 // Web Audio API synthesizer & custom audio player for Degv's Messenger
 let audioCtx: AudioContext | null = null;
 let soundMuted = false;
+let currentCustomAudio: HTMLAudioElement | null = null;
+let lastReceiveSoundTimestamp = 0;
+let lastSendSoundTimestamp = 0;
+const MIN_RECEIVE_SOUND_INTERVAL_MS = 400; // Prevent repetitive looping / barrage of sounds
+const MIN_SEND_SOUND_INTERVAL_MS = 250;
+let isAudioUnlockListenerAttached = false;
 
 // Default Sound Configuration
 export const DEFAULT_SOUND_SETTINGS: SoundCustomizationSettings = {
@@ -48,6 +54,41 @@ export function setSoundMuted(muted: boolean) {
   soundMuted = muted;
 }
 
+export function isSoundMuted(): boolean {
+  return soundMuted;
+}
+
+/**
+ * Ensures audio context is properly initialized and unlocked on user interaction
+ * to avoid browser autoplay policy restrictions and overlapping loops.
+ */
+export function initAudioUnlockListener() {
+  if (typeof window === "undefined" || isAudioUnlockListenerAttached) return;
+  isAudioUnlockListenerAttached = true;
+
+  const unlockAudio = () => {
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+    } catch {}
+  };
+
+  const events = ["click", "touchstart", "keydown"];
+  const handleInteraction = () => {
+    unlockAudio();
+    events.forEach((evt) => window.removeEventListener(evt, handleInteraction));
+  };
+
+  events.forEach((evt) => window.addEventListener(evt, handleInteraction, { passive: true, once: true }));
+}
+
+// Auto-attach unlocker in browser environments
+if (typeof window !== "undefined") {
+  initAudioUnlockListener();
+}
+
 function getAudioContext(): AudioContext {
   if (!audioCtx) {
     const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -59,13 +100,43 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
+// Stop all playing audio / sound effects
+export function stopAllSounds() {
+  if (currentCustomAudio) {
+    try {
+      currentCustomAudio.pause();
+      currentCustomAudio.currentTime = 0;
+      currentCustomAudio = null;
+    } catch {}
+  }
+}
+
 // Play custom audio file (from device gallery / file upload) or base64 data
 function playCustomAudio(audioUrlOrBase64: string): Promise<void> {
   return new Promise((resolve, reject) => {
     try {
+      stopAllSounds();
+
       const audio = new Audio(audioUrlOrBase64);
+      audio.loop = false;
       audio.volume = 0.85;
-      audio.play().then(() => resolve()).catch((err) => reject(err));
+      currentCustomAudio = audio;
+
+      const cleanup = () => {
+        if (currentCustomAudio === audio) {
+          currentCustomAudio = null;
+        }
+      };
+
+      audio.onended = cleanup;
+      audio.onerror = cleanup;
+
+      audio.play()
+        .then(() => resolve())
+        .catch((err) => {
+          cleanup();
+          reject(err);
+        });
     } catch (e) {
       reject(e);
     }
@@ -430,6 +501,12 @@ export function playSoundIdOrUrl(soundIdOrUrl: string, customSoundsList: CustomS
 
 export function playSendSound(selectedSoundId?: string, customSoundsList?: CustomSoundItem[]) {
   if (soundMuted) return;
+  const now = Date.now();
+  if (now - lastSendSoundTimestamp < MIN_SEND_SOUND_INTERVAL_MS) {
+    return;
+  }
+  lastSendSoundTimestamp = now;
+
   const cfg = storageService.getSoundSettings();
   const soundId = selectedSoundId || cfg.messageSound || "synth_classic";
   const customs = customSoundsList || cfg.customSounds || [];
@@ -438,6 +515,12 @@ export function playSendSound(selectedSoundId?: string, customSoundsList?: Custo
 
 export function playReceiveSound(selectedSoundId?: string, customSoundsList?: CustomSoundItem[]) {
   if (soundMuted) return;
+  const now = Date.now();
+  if (now - lastReceiveSoundTimestamp < MIN_RECEIVE_SOUND_INTERVAL_MS) {
+    return;
+  }
+  lastReceiveSoundTimestamp = now;
+
   const cfg = storageService.getSoundSettings();
   const soundId = selectedSoundId || cfg.notificationSound || cfg.messageSound || "pop_neon";
   const customs = customSoundsList || cfg.customSounds || [];
@@ -467,7 +550,10 @@ export const soundService = {
   playVideoCallRingSound,
   playSoundIdOrUrl,
   synthesizePresetSound,
+  stopAllSounds,
   setSoundMuted,
+  isSoundMuted,
+  initAudioUnlockListener,
   SOUND_PRESETS,
   DEFAULT_SOUND_SETTINGS,
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { UserProfile, Room, Message, ThemeMode, BubbleStyle, LanguageCode, FontOption, AccentColorOption } from "./types";
 import { storageService } from "./services/storageService";
 import { soundService } from "./services/soundService";
@@ -169,6 +169,19 @@ export const App: React.FC = () => {
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
 
+  // Tracking refs to prevent re-subscribing and repetitive sound loops
+  const activeChatIdRef = useRef<string | null>(activeChatId);
+  const soundMutedRef = useRef<boolean>(soundMuted);
+  const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
+
+  useEffect(() => {
+    soundMutedRef.current = soundMuted;
+  }, [soundMuted]);
+
   // Firebase Auth State & Anonymous Bootstrap Listener
   useEffect(() => {
     const unsubscribe = subscribeToFirebaseAuth((fbUser) => {
@@ -232,6 +245,7 @@ export const App: React.FC = () => {
     const unsubscribe = listenForUserRooms(currentUser.id, (cloudRooms) => {
       if (cloudRooms.length > 0) {
         setRooms((prev) => {
+          const currentActiveChat = activeChatIdRef.current;
           const cloudMap = new Map<string, Room>();
           cloudRooms.forEach((r) => cloudMap.set(r.id, r));
 
@@ -243,7 +257,7 @@ export const App: React.FC = () => {
                 ...localR,
                 lastMessage: cloudR.lastMessage || localR.lastMessage,
                 lastMessageTime: cloudR.lastMessageTime || localR.lastMessageTime,
-                unreadCount: localR.id === activeChatId ? 0 : (cloudR.unreadCount ?? localR.unreadCount),
+                unreadCount: localR.id === currentActiveChat ? 0 : (cloudR.unreadCount ?? localR.unreadCount),
                 participants: cloudR.participants || localR.participants,
               };
             }
@@ -258,12 +272,14 @@ export const App: React.FC = () => {
       }
     });
     return () => unsubscribe();
-  }, [currentUser?.id, activeChatId]);
+  }, [currentUser?.id]);
 
   // Firestore Real-Time Message Listener for direct inbox
   useEffect(() => {
     if (!currentUser?.id) return;
-    const unsubscribe = listenForMessages(currentUser.id, (incomingMsg) => {
+    const unsubscribe = listenForMessages(currentUser.id, (incomingMsg, isInitialLoad) => {
+      const currentActiveChat = activeChatIdRef.current;
+
       // 1. Ensure room exists in state and storage
       setRooms((prevRooms) => {
         const roomExists = prevRooms.some((r) => r.id === incomingMsg.roomId);
@@ -296,7 +312,7 @@ export const App: React.FC = () => {
                   ...r,
                   lastMessage: incomingMsg.content,
                   lastMessageTime: incomingMsg.createdAt,
-                  unreadCount: r.id === activeChatId ? 0 : (r.unreadCount || 0) + 1,
+                  unreadCount: r.id === currentActiveChat ? 0 : (r.unreadCount || 0) + 1,
                 }
               : r
           );
@@ -316,19 +332,34 @@ export const App: React.FC = () => {
         return { ...prev, [incomingMsg.roomId]: updated };
       });
 
-      if (incomingMsg.senderId !== currentUser.id) {
-        if (!soundMuted) soundService.playReceiveSound();
-        notificationService.sendNotification(
-          incomingMsg.senderName || "Nuevo mensaje",
-          incomingMsg.content,
-          incomingMsg.roomId,
-          "messages"
-        );
+      // 3. Play sound ONLY for fresh incoming real-time messages, NEVER on initial historical snapshot
+      if (
+        !isInitialLoad &&
+        incomingMsg.senderId !== currentUser.id &&
+        !notifiedMessageIdsRef.current.has(incomingMsg.id)
+      ) {
+        notifiedMessageIdsRef.current.add(incomingMsg.id);
+        const isFresh = !incomingMsg.timestamp || Date.now() - incomingMsg.timestamp < 60000;
+        const isRoomMuted = storageService.isRoomMuted(incomingMsg.roomId);
+        if (isFresh && !isRoomMuted) {
+          if (!soundMutedRef.current) {
+            soundService.playReceiveSound();
+          }
+          notificationService.sendNotification(
+            incomingMsg.senderName || "Nuevo mensaje",
+            incomingMsg.content,
+            incomingMsg.roomId,
+            "messages",
+            incomingMsg.senderId
+          );
+        }
+      } else if (incomingMsg.id) {
+        notifiedMessageIdsRef.current.add(incomingMsg.id);
       }
     });
 
     return () => unsubscribe();
-  }, [currentUser, soundMuted, activeChatId]);
+  }, [currentUser?.id]);
 
   // Deep-linking / Real-time QR & URL pairing listener
   useEffect(() => {
@@ -1121,10 +1152,13 @@ export const App: React.FC = () => {
           isRead: true,
         };
 
-        if (!soundMuted) soundService.playReceiveSound();
+        const isAiMuted = storageService.isRoomMuted(roomId);
+        if (!soundMuted && !isAiMuted) soundService.playReceiveSound();
         setMessagesMap((prev) => ({ ...prev, [roomId]: [...(prev[roomId] || []), aiMsg] }));
         storageService.saveMessage(roomId, aiMsg);
-        notificationService.sendNotification("Degv's AI", `Imagen generada: "${promptText}"`, roomId, "aiActivity");
+        if (!isAiMuted) {
+          notificationService.sendNotification("Degv's AI", `Imagen generada: "${promptText}"`, roomId, "aiActivity", "usr_ai_assistant");
+        }
         return;
       }
 
@@ -1251,8 +1285,11 @@ export const App: React.FC = () => {
         return { ...prev, [roomId]: updated };
       });
 
-      if (!soundMuted) soundService.playReceiveSound();
-      notificationService.sendNotification("Degv's AI", accumulatedText.slice(0, 100), roomId, "aiActivity");
+      const isAiTextMuted = storageService.isRoomMuted(roomId);
+      if (!soundMuted && !isAiTextMuted) soundService.playReceiveSound();
+      if (!isAiTextMuted) {
+        notificationService.sendNotification("Degv's AI", accumulatedText.slice(0, 100), roomId, "aiActivity", "usr_ai_assistant");
+      }
 
       setRooms((prev) =>
         prev.map((r) =>
@@ -1499,6 +1536,25 @@ export const App: React.FC = () => {
     setShowMobileChat(true);
   };
 
+  // Toggle per-conversation mute state
+  const handleToggleMuteRoom = (roomId: string) => {
+    if (!roomId) return;
+    const isNowMuted = storageService.toggleRoomMute(roomId);
+    setRooms((prev) =>
+      prev.map((r) => (r.id === roomId ? { ...r, isMuted: isNowMuted } : r))
+    );
+    const targetRoom = rooms.find((r) => r.id === roomId);
+    const roomTitle = targetRoom?.name || "Conversación";
+    setSyncToastMessage(
+      isNowMuted
+        ? `🔔 Silenciaste las notificaciones de "${roomTitle}".`
+        : `🔊 Notificaciones activadas para "${roomTitle}".`
+    );
+    setTimeout(() => {
+      setSyncToastMessage(null);
+    }, 3000);
+  };
+
   return (
     <div className="flex h-full h-[100dvh] w-full fixed inset-0 overflow-hidden bg-[#050505] text-slate-100 font-sans antialiased selection:bg-[#00E676] selection:text-slate-950">
       {/* LEFT SIDEBAR COLUMN (Hidden on Mobile when chat active) */}
@@ -1658,6 +1714,7 @@ export const App: React.FC = () => {
               setCreateGroupChannelMode("channel");
               setIsCreateGroupChannelOpen(true);
             }}
+            onToggleMute={handleToggleMuteRoom}
           />
         )}
 
@@ -1772,6 +1829,7 @@ export const App: React.FC = () => {
             onSelectSmartReply={(text) => handleSendMessage(text, "text")}
             readReceiptsEnabled={readReceiptsEnabled}
             onOpenLockSetup={() => setIsLockSetupModalOpen(true)}
+            onToggleMuteChat={handleToggleMuteRoom}
           />
         )}
       </div>
@@ -2090,6 +2148,11 @@ export const App: React.FC = () => {
           const updatedRooms = rooms.map((r) => (r.id === activeChatId ? { ...r, wallpaper: preset } : r));
           setRooms(updatedRooms);
           storageService.saveRooms(updatedRooms);
+          const changedRoom = updatedRooms.find((r) => r.id === activeChatId);
+          if (changedRoom) {
+            storageService.saveRoom(changedRoom);
+            saveRoomToFirestore(changedRoom);
+          }
         }}
       />
 

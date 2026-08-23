@@ -790,7 +790,7 @@ export async function sendMessage(
  */
 export function listenForMessages(
   currentUserId: string,
-  onNewMessage: (message: Message) => void
+  onNewMessage: (message: Message, isInitialLoad: boolean) => void
 ): Unsubscribe {
   try {
     const q = query(
@@ -798,9 +798,12 @@ export function listenForMessages(
       where("receiverId", "==", currentUserId)
     );
 
+    let isInitialSnapshot = true;
+
     return onSnapshot(
       q,
       (snapshot) => {
+        const isInitial = isInitialSnapshot;
         snapshot.docChanges().forEach((change) => {
           if (change.type === "added") {
             const data = change.doc.data();
@@ -816,9 +819,10 @@ export function listenForMessages(
             }
 
             const messageObj = normalizeMessage({ id: change.doc.id, ...data }, data.roomId);
-            onNewMessage(messageObj);
+            onNewMessage(messageObj, isInitial);
           }
         });
+        isInitialSnapshot = false;
       },
       (error) => {
         console.warn("[Firestore] listenForMessages notice:", error.message);

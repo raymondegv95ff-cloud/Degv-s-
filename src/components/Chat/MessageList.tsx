@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useMemo } from "react";
 import { Message, Room, BubbleStyle, UserProfile } from "../../types";
 import { MessageBubble } from "./MessageBubble";
 import { Pin, ShieldCheck, Lock } from "lucide-react";
@@ -44,11 +44,20 @@ export const MessageList: React.FC<MessageListProps> = ({
   }, [messages]);
 
   // Filter messages if search query active
-  const filteredMessages = searchQueryInChat.trim()
-    ? messages.filter((m) =>
-        m.content.toLowerCase().includes(searchQueryInChat.toLowerCase())
-      )
-    : messages;
+  const filteredMessages = useMemo(() => {
+    if (!searchQueryInChat.trim()) return messages;
+    const q = searchQueryInChat.toLowerCase().trim();
+    return messages.filter((m) => {
+      return (
+        m.content?.toLowerCase().includes(q) ||
+        m.translatedText?.toLowerCase().includes(q) ||
+        m.audioTranscript?.toLowerCase().includes(q) ||
+        m.poll?.question?.toLowerCase().includes(q) ||
+        m.poll?.options?.some((o) => o.text.toLowerCase().includes(q)) ||
+        m.senderName?.toLowerCase().includes(q)
+      );
+    });
+  }, [messages, searchQueryInChat]);
 
   // Find pinned message if any
   const pinnedMsg = messages.find((m) => m.isPinned || m.id === room.pinnedMessageId);
@@ -112,6 +121,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             onTranscribeAudio={onTranscribeAudio}
             onTranslateText={onTranslateText}
             readReceiptsEnabled={readReceiptsEnabled}
+            searchQueryInChat={searchQueryInChat}
           />
         ))
       ) : (

@@ -24,6 +24,10 @@ import {
   HardDrive,
   CheckCircle2,
   Zap,
+  Bell,
+  BellOff,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 
 interface ChatHeaderProps {
@@ -39,6 +43,7 @@ interface ChatHeaderProps {
   onDeleteChat?: (roomId: string) => void;
   onOpenLockSetup?: () => void;
   onOpenSmartSummary?: () => void;
+  onToggleMute?: (roomId: string) => void;
   isTyping?: boolean;
 }
 
@@ -55,6 +60,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onDeleteChat,
   onOpenLockSetup,
   onOpenSmartSummary,
+  onToggleMute,
   isTyping,
 }) => {
   const [showMenu, setShowMenu] = useState(false);
@@ -62,6 +68,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const isAi = room.isAiChat;
   const isCurrentlyTyping = isTyping || room.isTyping;
   const cachedMessagesCount = storageService.getRoomCachedCount(room.id);
+  const isMuted = !!room.isMuted || storageService.isRoomMuted(room.id);
 
   return (
     <header className="h-20 px-6 flex items-center justify-between border-b border-white/5 bg-[#0a0a0a]/90 backdrop-blur-md z-10 select-none">
@@ -218,6 +225,30 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <Search className="w-5 h-5" />
         </button>
 
+        {/* Visual Sound Status Indicator Button */}
+        {onToggleMute && (
+          <button
+            onClick={() => onToggleMute(room.id)}
+            id="chat-header-mute-toggle"
+            className={`p-1.5 rounded-xl transition-all flex items-center justify-center ${
+              isMuted
+                ? "text-amber-400 bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                : "hover:text-[#00E676] hover:bg-white/5 text-slate-400"
+            }`}
+            title={
+              isMuted
+                ? "Chat silenciado (Click para activar notificaciones de este chat)"
+                : "Sonido activo (Click para silenciar este chat)"
+            }
+          >
+            {isMuted ? (
+              <BellOff className="w-5 h-5 animate-in zoom-in-75 duration-150" />
+            ) : (
+              <Bell className="w-5 h-5 transition-transform group-hover:scale-110" />
+            )}
+          </button>
+        )}
+
         {/* Dropdown Menu */}
         <div className="relative">
           <button
@@ -243,6 +274,33 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 >
                   <Sparkles className="w-4 h-4 text-[#00E676]" />
                   <span>Resumen Inteligente (IA)</span>
+                </button>
+              )}
+
+              {/* Sound / Mute Toggle Option in Menu */}
+              {onToggleMute && (
+                <button
+                  onClick={() => {
+                    setShowMenu(false);
+                    onToggleMute(room.id);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-xl flex items-center gap-2.5 transition-colors ${
+                    isMuted
+                      ? "text-amber-400 hover:bg-amber-500/10"
+                      : "hover:bg-white/5 hover:text-[#00E676]"
+                  }`}
+                >
+                  {isMuted ? (
+                    <>
+                      <Bell className="w-4 h-4 text-emerald-400" />
+                      <span>Activar sonido de este chat</span>
+                    </>
+                  ) : (
+                    <>
+                      <BellOff className="w-4 h-4 text-amber-400" />
+                      <span>Silenciar este chat</span>
+                    </>
+                  )}
                 </button>
               )}
 

@@ -21,6 +21,7 @@ interface ChatListProps {
   onSelectUser?: (user: UserProfile) => void;
   onOpenCreateGroup?: () => void;
   onOpenCreateChannel?: () => void;
+  onToggleMute?: (roomId: string) => void;
 }
 
 export const ChatList: React.FC<ChatListProps> = ({
@@ -40,6 +41,7 @@ export const ChatList: React.FC<ChatListProps> = ({
   onSelectUser,
   onOpenCreateGroup,
   onOpenCreateChannel,
+  onToggleMute,
 }) => {
   // Filter rooms according to search term and category
   const filteredRooms = rooms.filter((room) => {
@@ -244,6 +246,7 @@ export const ChatList: React.FC<ChatListProps> = ({
             onToggleArchive={onToggleArchive}
             onAssignFolder={onAssignFolder}
             onDeleteChat={onDeleteChat}
+            onToggleMute={onToggleMute}
           />
         ))
       ) : matchedNewUsers.length === 0 ? (

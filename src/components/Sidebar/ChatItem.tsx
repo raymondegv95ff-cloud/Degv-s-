@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Room } from "../../types";
-import { Bot, Users, Radio, Pin, Archive, Folder, MoreVertical, FolderCheck, Trash2 } from "lucide-react";
+import { storageService } from "../../services/storageService";
+import { Bot, Users, Radio, Pin, Archive, Folder, MoreVertical, FolderCheck, Trash2, Bell, BellOff } from "lucide-react";
 
 interface ChatItemProps {
   room: Room;
@@ -10,6 +11,7 @@ interface ChatItemProps {
   onToggleArchive?: (roomId: string) => void;
   onAssignFolder?: (roomId: string, folderName: string | undefined) => void;
   onDeleteChat?: (roomId: string) => void;
+  onToggleMute?: (roomId: string) => void;
 }
 
 export const ChatItem: React.FC<ChatItemProps> = ({
@@ -20,12 +22,14 @@ export const ChatItem: React.FC<ChatItemProps> = ({
   onToggleArchive,
   onAssignFolder,
   onDeleteChat,
+  onToggleMute,
 }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [showFoldersMenu, setShowFoldersMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const isAi = room.isAiChat;
+  const isMuted = !!room.isMuted || storageService.isRoomMuted(room.id);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -169,6 +173,12 @@ export const ChatItem: React.FC<ChatItemProps> = ({
               </div>
             )}
 
+            {isMuted && (
+              <span className="text-amber-400/80" title="Silenciado">
+                <BellOff className="w-3.5 h-3.5" />
+              </span>
+            )}
+
             {/* Menu Trigger Button */}
             <button
               onClick={(e) => {
@@ -249,6 +259,31 @@ export const ChatItem: React.FC<ChatItemProps> = ({
               </div>
             )}
           </div>
+
+          {/* Toggle Mute / Sound */}
+          {onToggleMute && (
+            <button
+              onClick={() => {
+                onToggleMute(room.id);
+                setShowMenu(false);
+              }}
+              className={`w-full flex items-center gap-2 px-2.5 py-2 hover:bg-slate-800 rounded-xl transition text-left ${
+                isMuted ? "text-amber-400" : "text-slate-200"
+              }`}
+            >
+              {isMuted ? (
+                <>
+                  <Bell className="w-4 h-4 text-emerald-400" />
+                  <span>Activar Sonido</span>
+                </>
+              ) : (
+                <>
+                  <BellOff className="w-4 h-4 text-amber-400" />
+                  <span>Silenciar Chat</span>
+                </>
+              )}
+            </button>
+          )}
 
           <div className="my-1 border-t border-slate-800" />
 

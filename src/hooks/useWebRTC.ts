@@ -256,6 +256,7 @@ export function useWebRTC(currentUser: UserProfile | null) {
   const answerCall = useCallback(async () => {
     if (!incomingCall) return;
 
+    soundService.stopAllSounds();
     console.log(`[useWebRTC: Firestore Signaling] 📞 [answerCall: Step 2] Aceptando llamada entrante ${incomingCall.id} de ${incomingCall.callerName}...`);
 
     try {
@@ -279,6 +280,7 @@ export function useWebRTC(currentUser: UserProfile | null) {
 
   // 7. Rechazar llamada entrante
   const declineCall = useCallback(async () => {
+    soundService.stopAllSounds();
     if (incomingCall) {
       console.log(`[useWebRTC: Firestore Signaling] ❌ [declineCall] Rechazando llamada entrante ${incomingCall.id} en Firestore`);
       await webrtcService.declineCall(incomingCall.id);
@@ -288,6 +290,7 @@ export function useWebRTC(currentUser: UserProfile | null) {
 
   // 8. Finalizar llamada activa
   const endCallCleanly = useCallback(() => {
+    soundService.stopAllSounds();
     console.log(`[useWebRTC: Firestore Signaling] 📴 [endCallCleanly] Finalizando sesión de llamada activa ${activeCall?.id || ""}`);
     webrtcService.endCall(activeCall?.id);
     setActiveCall(null);

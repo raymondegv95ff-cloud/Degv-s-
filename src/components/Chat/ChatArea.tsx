@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Room, Message, BubbleStyle, UserProfile } from "../../types";
 import { ChatHeader } from "./ChatHeader";
 import { MessageList } from "./MessageList";
 import { ChatInputBar } from "./ChatInputBar";
 import { SmartSummaryDrawer } from "../Modals/SmartSummaryDrawer";
-import { Bot, MessageSquare, ShieldCheck, Sparkles, Plus, Smartphone, Lock, Minimize2 } from "lucide-react";
+import { Bot, MessageSquare, ShieldCheck, Sparkles, Plus, Smartphone, Lock, Minimize2, Search, X, ChevronUp, ChevronDown } from "lucide-react";
 import { listenForRoomMessages, db } from "../../services/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
 
@@ -39,6 +39,7 @@ interface ChatAreaProps {
   onSelectSmartReply: (text: string) => void;
   readReceiptsEnabled?: boolean;
   onOpenLockSetup?: () => void;
+  onToggleMuteChat?: (roomId: string) => void;
 }
 
 const getWallpaperStyles = (wallpaper?: string) => {
@@ -48,14 +49,16 @@ const getWallpaperStyles = (wallpaper?: string) => {
   if (wallpaper.startsWith("http") || wallpaper.startsWith("data:image")) {
     return {
       className: "bg-cover bg-center bg-no-repeat",
-      style: { backgroundImage: `url("${wallpaper}")` },
+      style: {
+        backgroundImage: `linear-gradient(rgba(5, 5, 5, 0.75), rgba(5, 5, 5, 0.85)), url("${wallpaper}")`,
+      },
     };
   }
   switch (wallpaper) {
     case "gradient_cyber":
       return { className: "bg-gradient-to-b from-[#0B0F19] via-slate-950 to-indigo-950" };
     case "neon_grid":
-      return { className: "bg-[#0B0F19] bg-[radial-gradient(#00E676_1px,transparent_1px)] [background-size:20px_20px]" };
+      return { className: "bg-[#0B0F19] bg-[radial-gradient(#00E676_1.5px,transparent_1.5px)] [background-size:18px_18px]" };
     case "emerald_night":
       return { className: "bg-gradient-to-br from-emerald-950 via-slate-950 to-teal-950" };
     case "violet_galaxy":
@@ -63,7 +66,9 @@ const getWallpaperStyles = (wallpaper?: string) => {
     case "sunset_glow":
       return { className: "bg-gradient-to-br from-amber-950 via-slate-950 to-rose-950" };
     case "minimal_dots":
-      return { className: "bg-[#050505] bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:16px_16px]" };
+      return { className: "bg-[#050505] bg-[radial-gradient(#38bdf8_1.5px,transparent_1.5px)] [background-size:16px_16px]" };
+    case "deep_ocean":
+      return { className: "bg-gradient-to-tr from-cyan-950 via-blue-950 to-slate-950" };
     default:
       return { className: "bg-[#050505]" };
   }
@@ -100,6 +105,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSelectSmartReply,
   readReceiptsEnabled,
   onOpenLockSetup,
+  onToggleMuteChat,
 }) => {
   const [searchQueryInChat, setSearchQueryInChat] = useState("");
   const [showInChatSearch, setShowInChatSearch] = useState(false);
@@ -109,10 +115,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [realtimeMessages, setRealtimeMessages] = useState<Message[] | null>(null);
   const [firestoreRoom, setFirestoreRoom] = useState<Room | null>(activeRoom);
 
+  // Listen for Ctrl+F or Cmd+F keyboard shortcut to toggle in-chat search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && activeRoom) {
+        e.preventDefault();
+        setShowInChatSearch((prev) => !prev);
+      } else if (e.key === "Escape" && showInChatSearch) {
+        setShowInChatSearch(false);
+        setSearchQueryInChat("");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeRoom, showInChatSearch]);
+
   useEffect(() => {
     if (!activeRoom?.id) {
       setRealtimeMessages(null);
       setFirestoreRoom(null);
+      setSearchQueryInChat("");
+      setShowInChatSearch(false);
       return;
     }
 
@@ -123,12 +146,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     // 1. Listen in real-time to messages for activeRoom.id directly from Firestore
     const unsubMessages = listenForRoomMessages(activeRoom.id, (cloudMsgs) => {
-      console.log(`[listenForRoomMessages: onSnapshot callback] 📥 Real-time data reception verified: ${cloudMsgs.length} messages received from Firestore for room '${activeRoom.id}':`, cloudMsgs);
-      console.log(`[listenForRoomMessages: onSnapshot callback] 📦 Full payload object received in client:`, JSON.stringify(cloudMsgs, null, 2));
       setRealtimeMessages(cloudMsgs || []);
     });
 
-    // 2. Listen in real-time to room document updates (lastMessage, lastMessageTime, participants)
+    // 2. Listen in real-time to room document updates
     let unsubRoom = () => {};
     let unsubChatsRoom = () => {};
     try {
@@ -145,6 +166,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               unreadCount: d.unreadCount ?? prev.unreadCount,
               participants: d.participants || prev.participants,
               isTyping: d.isTyping ?? prev.isTyping,
+              wallpaper: d.wallpaper !== undefined ? d.wallpaper : prev.wallpaper,
             };
           });
         }
@@ -163,6 +185,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               unreadCount: d.unreadCount ?? prev.unreadCount,
               participants: d.participants || prev.participants,
               isTyping: d.isTyping ?? prev.isTyping,
+              wallpaper: d.wallpaper !== undefined ? d.wallpaper : prev.wallpaper,
             };
           });
         }
@@ -172,15 +195,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     return () => {
-      console.log(`[ChatArea] 🔌 Desconectando listeners onSnapshot para sala: ${activeRoom.id}`);
       unsubMessages();
       unsubRoom();
       unsubChatsRoom();
     };
   }, [activeRoom?.id]);
 
-  // Real-time Firestore messages stream seamlessly merged with local state (no manual refresh needed)
-  const effectiveMessages = React.useMemo(() => {
+  // Real-time Firestore messages stream seamlessly merged with local state
+  const effectiveMessages = useMemo(() => {
     const propMsgs = messages || [];
     if (!realtimeMessages) return propMsgs;
     const msgMap = new Map<string, Message>();
@@ -190,6 +212,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }, [realtimeMessages, messages]);
 
   const effectiveRoom = firestoreRoom || activeRoom;
+
+  // Compute matched messages count when in-chat search is active
+  const searchMatchesCount = useMemo(() => {
+    if (!searchQueryInChat.trim()) return 0;
+    const q = searchQueryInChat.toLowerCase();
+    return effectiveMessages.filter((m) => {
+      return (
+        m.content?.toLowerCase().includes(q) ||
+        m.translatedText?.toLowerCase().includes(q) ||
+        m.audioTranscript?.toLowerCase().includes(q) ||
+        m.poll?.question?.toLowerCase().includes(q) ||
+        m.poll?.options?.some((o) => o.text.toLowerCase().includes(q))
+      );
+    }).length;
+  }, [effectiveMessages, searchQueryInChat]);
 
   // If no chat selected, display clean welcome neutral state!
   if (!effectiveRoom) {
@@ -274,7 +311,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         room={effectiveRoom}
         onBackMobile={onBackMobile}
         onOpenContactDrawer={onOpenContactDrawer}
-        onOpenSearchInChat={() => setShowInChatSearch(!showInChatSearch)}
+        onOpenSearchInChat={() => {
+          setShowInChatSearch(!showInChatSearch);
+          if (showInChatSearch) setSearchQueryInChat("");
+        }}
         onStartCall={onStartCall}
         onExportChat={onExportChat}
         onOpenWallpaperSelector={onOpenWallpaperSelector}
@@ -283,19 +323,52 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         onDeleteChat={onDeleteChat}
         onOpenLockSetup={onOpenLockSetup}
         onOpenSmartSummary={() => setIsSummaryDrawerOpen(true)}
+        onToggleMute={onToggleMuteChat}
         isTyping={effectiveRoom.isTyping}
       />
 
-      {/* In-Chat Search Bar Toggle */}
+      {/* In-Chat Message Search Bar */}
       {showInChatSearch && (
-        <div className="p-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs px-4 animate-in slide-in-from-top duration-150">
-          <input
-            type="text"
-            value={searchQueryInChat}
-            onChange={(e) => setSearchQueryInChat(e.target.value)}
-            placeholder="Filtrar mensajes por texto..."
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#00E676]"
-          />
+        <div className="p-2.5 bg-[#0a0a0a]/95 backdrop-blur-md border-b border-white/10 flex items-center justify-between gap-3 text-xs px-5 animate-in slide-in-from-top-2 duration-150 z-10 shadow-lg">
+          <div className="relative flex-1 flex items-center">
+            <Search className="w-4 h-4 text-[#00E676] absolute left-3 pointer-events-none" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQueryInChat}
+              onChange={(e) => setSearchQueryInChat(e.target.value)}
+              placeholder="Buscar palabras o contenido en este chat..."
+              className="w-full bg-[#141414] border border-white/10 rounded-xl pl-9 pr-8 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#00E676] focus:ring-1 focus:ring-[#00E676]/40 transition"
+            />
+            {searchQueryInChat && (
+              <button
+                onClick={() => setSearchQueryInChat("")}
+                className="absolute right-2.5 p-1 rounded-full text-slate-400 hover:text-white hover:bg-white/10"
+                title="Limpiar búsqueda"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {searchQueryInChat.trim() && (
+              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#00E676]/15 text-[#00E676] border border-[#00E676]/30">
+                {searchMatchesCount} {searchMatchesCount === 1 ? "coincidencia" : "coincidencias"}
+              </span>
+            )}
+            <button
+              onClick={() => {
+                setShowInChatSearch(false);
+                setSearchQueryInChat("");
+              }}
+              className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 text-xs font-semibold flex items-center gap-1"
+              title="Cerrar búsqueda (Esc)"
+            >
+              <X className="w-4 h-4" />
+              <span className="hidden sm:inline">Cerrar</span>
+            </button>
+          </div>
         </div>
       )}
 
