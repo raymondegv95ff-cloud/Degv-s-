@@ -1,73 +1,105 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to verify Firebase Auth authentication
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Users Collection: User profiles, presence, and metadata
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users Collection: Authenticated users can list/read user directory, but only owner can write/edit their own profile
     match /users/{userId} {
-      allow read, write: if isAuthenticated() || true;
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && (request.auth.uid == userId || request.resource.data.id == request.auth.uid);
+      allow delete: if isOwner(userId);
     }
 
-    // Chats Rooms Collection: Real-time chats, rooms, channels and subcollections
-    match /chats_rooms/{roomId} {
-      allow read, write: if isAuthenticated() || true;
-
-      match /{allSubcollections=**} {
-        allow read, write: if isAuthenticated() || true;
-      }
-    }
-
-    // Rooms Collection (including offers, answers, iceCandidates subcollections)
+    // Rooms Collection (Conversations & Group Channels)
     match /rooms/{roomId} {
-      allow read, write: if isAuthenticated() || true;
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        resource.data.participants == null ||
+        request.auth.uid in resource.data.participants
+      );
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated() && (
+        resource.data.participants == null ||
+        request.auth.uid in resource.data.participants
+      );
 
       match /{allSubcollections=**} {
-        allow read, write: if isAuthenticated() || true;
+        allow read, write: if isAuthenticated();
       }
     }
 
-    // Messages Collection: Real-time chat messages
+    // Chats Rooms Collection: Legacy & Group Chats
+    match /chats_rooms/{roomId} {
+      allow read, write: if isAuthenticated();
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+
+    // Direct Messages & Real-Time Messages Collection
     match /messages/{messageId} {
-      allow read, write: if isAuthenticated() || true;
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        resource.data.senderId == request.auth.uid ||
+        resource.data.receiverId == request.auth.uid ||
+        resource.data.recipientId == request.auth.uid ||
+        (resource.data.participants != null && request.auth.uid in resource.data.participants)
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.senderId == request.auth.uid ||
+        request.resource.data.senderId == null
+      );
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated() && (
+        resource.data.senderId == request.auth.uid
+      );
+    }
+
+    // Nested Conversations Collection: conversations/{conversationId}/messages/{messageId}
+    match /conversations/{conversationId} {
+      allow read, write: if isAuthenticated();
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated();
+        allow create, update: if isAuthenticated();
+        allow delete: if isAuthenticated() && resource.data.senderId == request.auth.uid;
+      }
+
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated();
+      }
     }
 
     // Calls Collection: WebRTC P2P Signaling (Offers, Answers, ICE Candidates)
     match /calls/{callId} {
-      allow read, write: if isAuthenticated() || true;
+      allow read, write: if isAuthenticated();
 
       match /{allSubcollections=**} {
-        allow read, write: if isAuthenticated() || true;
+        allow read, write: if isAuthenticated();
       }
     }
 
-    // Conversations Collection: Conversations, direct messages, group chats and subcollections (messages, etc.)
-    match /conversations/{conversationId} {
-      allow read, write: if isAuthenticated() || true;
-
-      match /{allSubcollections=**} {
-        allow read, write: if isAuthenticated() || true;
-      }
-    }
-
-    // Platform Updates & Sync Collection: Real-time multi-platform versioning and telemetry
+    // Platform Updates & Sync Collection
     match /platform_updates/{updateId} {
-      allow read, write: if isAuthenticated() || true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
 
       match /{allSubcollections=**} {
-        allow read, write: if isAuthenticated() || true;
+        allow read, write: if isAuthenticated();
       }
     }
 
     // System Status & Cross-Platform Health
     match /system_status/{statusId} {
-      allow read, write: if isAuthenticated() || true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
   }
 }
-
-
-
-

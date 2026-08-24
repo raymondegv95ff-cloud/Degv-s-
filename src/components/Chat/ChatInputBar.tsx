@@ -4,6 +4,7 @@ import { ImageFilterModal } from "../Modals/ImageFilterModal";
 import { StickerPickerPanel } from "./StickerPickerPanel";
 import { CalendarEventModal } from "../Modals/CalendarEventModal";
 import { QuickRepliesModal } from "../Modals/QuickRepliesModal";
+import { VoiceRecorder } from "./VoiceRecorder";
 import { SmartReplyService, DetectedEntity } from "../../services/smartReplyService";
 import { storageService } from "../../services/storageService";
 import {
@@ -697,41 +698,16 @@ export const ChatInputBar: React.FC<ChatInputBarProps> = ({
 
       {/* Active Voice Recorder UI vs Standard Input Bar */}
       {isRecordingVoice ? (
-        <div className="flex items-center justify-between p-2 rounded-2xl bg-white/5 border border-red-500/50">
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-red-500 animate-ping" />
-            <span className="font-mono text-xs font-bold text-red-400">
-              Grabando {recordingSeconds}s
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1 h-6 px-4">
-            {[40, 80, 50, 90, 30, 100, 70, 40, 90, 60, 80, 50].map((h, i) => (
-              <span
-                key={i}
-                style={{ height: `${h}%` }}
-                className="w-1 bg-red-500 rounded-full animate-pulse"
-              />
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={cancelRecording}
-              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 transition-colors"
-              title="Cancelar"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-            <button
-              onClick={stopRecordingAndPreview}
-              className="p-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold transition-colors"
-              title="Detener y Previsualizar"
-            >
-              <Square className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+        <VoiceRecorder
+          roomId={activeChatId}
+          onSendVoice={(content, type, mediaUrl) => {
+            onSendMessage(content, type, mediaUrl);
+            setIsRecordingVoice(false);
+          }}
+          onCancel={() => {
+            setIsRecordingVoice(false);
+          }}
+        />
       ) : voicePreviewUrl ? (
         <div className="flex items-center justify-between p-2 rounded-2xl bg-white/5 border border-[#00E676]/50">
           <div className="flex items-center gap-2">

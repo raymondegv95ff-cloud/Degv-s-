@@ -40,6 +40,7 @@ interface ChatAreaProps {
   readReceiptsEnabled?: boolean;
   onOpenLockSetup?: () => void;
   onToggleMuteChat?: (roomId: string) => void;
+  onOpenWalkieTalkie?: () => void;
 }
 
 const getWallpaperStyles = (wallpaper?: string) => {
@@ -106,6 +107,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   readReceiptsEnabled,
   onOpenLockSetup,
   onToggleMuteChat,
+  onOpenWalkieTalkie,
 }) => {
   const [searchQueryInChat, setSearchQueryInChat] = useState("");
   const [showInChatSearch, setShowInChatSearch] = useState(false);
@@ -316,6 +318,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           if (showInChatSearch) setSearchQueryInChat("");
         }}
         onStartCall={onStartCall}
+        onOpenWalkieTalkie={onOpenWalkieTalkie}
         onExportChat={onExportChat}
         onOpenWallpaperSelector={onOpenWallpaperSelector}
         onOpenE2EEModal={onOpenE2EEModal}

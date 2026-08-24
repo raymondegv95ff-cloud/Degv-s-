@@ -119,7 +119,13 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
 }) => {
   const [selectedTab, setSelectedTab] = useState<"all" | "gradient" | "pattern" | "image">("all");
   const [customUrl, setCustomUrl] = useState("");
+  const [previewWallpaper, setPreviewWallpaper] = useState<string>(currentWallpaper || "default");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync previewWallpaper when modal opens with new currentWallpaper
+  React.useEffect(() => {
+    setPreviewWallpaper(currentWallpaper || "default");
+  }, [currentWallpaper, isOpen]);
 
   if (!isOpen) return null;
 
@@ -129,8 +135,8 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
       const reader = new FileReader();
       reader.onload = (event) => {
         if (event.target?.result) {
-          onSelectWallpaper(event.target.result as string);
-          onClose();
+          const dataUrl = event.target.result as string;
+          setPreviewWallpaper(dataUrl);
         }
       };
       reader.readAsDataURL(file);
@@ -140,18 +146,45 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
   const handleApplyCustomUrl = (e: React.FormEvent) => {
     e.preventDefault();
     if (customUrl.trim()) {
-      onSelectWallpaper(customUrl.trim());
-      onClose();
+      setPreviewWallpaper(customUrl.trim());
     }
+  };
+
+  const handleSave = () => {
+    onSelectWallpaper(previewWallpaper);
+    onClose();
   };
 
   const filteredPresets = CURATED_WALLPAPERS.filter(
     (p) => selectedTab === "all" || p.category === selectedTab || (selectedTab === "gradient" && p.category === "minimal")
   );
 
+  // Helper to resolve CSS classes / styles for preview
+  const getPreviewStyles = (wp: string) => {
+    if (!wp || wp === "default") {
+      return {
+        className: "bg-[#050505]",
+        style: {},
+      };
+    }
+    const foundPreset = CURATED_WALLPAPERS.find((p) => p.id === wp);
+    if (foundPreset && foundPreset.category !== "image") {
+      return {
+        className: foundPreset.bgClass,
+        style: {},
+      };
+    }
+    return {
+      className: "bg-cover bg-center",
+      style: { backgroundImage: `url("${wp}")` },
+    };
+  };
+
+  const previewStyle = getPreviewStyles(previewWallpaper);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 text-slate-100 relative max-h-[90vh] overflow-y-auto custom-scrollbar">
+      <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 text-slate-100 relative max-h-[92vh] overflow-y-auto custom-scrollbar">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-800 pb-3.5">
           <div className="flex items-center gap-3">
@@ -162,11 +195,11 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
               <h2 className="font-black text-sm tracking-tight text-white flex items-center gap-2">
                 Fondo de Pantalla del Chat
                 <span className="text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-full bg-[#00E676]/20 text-[#00E676] border border-[#00E676]/30">
-                  Por Sala
+                  Vista Previa en Vivo
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Personaliza la estética visual de este chat con fondos e imágenes de alta definición.
+                Selecciona un fondo para previsualizar en tiempo real cómo interactúa con las burbujas de mensaje.
               </p>
             </div>
           </div>
@@ -176,6 +209,91 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
+
+        {/* Real-time Live Chat Area Preview */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#00E676]" />
+              <span>Previsualización del Chat en Tiempo Real</span>
+            </span>
+            {previewWallpaper !== "default" && (
+              <button
+                type="button"
+                onClick={() => setPreviewWallpaper("default")}
+                className="text-[10px] text-slate-400 hover:text-[#00E676] flex items-center gap-1 transition"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Restablecer previsualización</span>
+              </button>
+            )}
+          </div>
+
+          <div
+            className={`relative w-full h-48 rounded-2xl border border-slate-700/80 overflow-hidden shadow-inner flex flex-col justify-between p-3 ${previewStyle.className}`}
+            style={previewStyle.style}
+          >
+            {/* Subtle background pattern if default */}
+            {previewWallpaper === "default" && (
+              <div className="absolute inset-0 bg-[radial-gradient(#00E676_1px,transparent_1px)] [background-size:16px_16px] opacity-15 pointer-events-none" />
+            )}
+
+            {/* Dark glass tint overlay for image wallpapers */}
+            {(previewWallpaper.startsWith("http") || previewWallpaper.startsWith("data:")) && (
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] pointer-events-none" />
+            )}
+
+            {/* Mini Chat Header */}
+            <div className="relative z-10 flex items-center justify-between px-3 py-1.5 rounded-xl bg-slate-950/70 border border-white/10 backdrop-blur-md">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-cyan-400 to-[#00E676] flex items-center justify-center text-[10px] font-black text-black">
+                  D
+                </div>
+                <div className="leading-tight">
+                  <p className="text-xs font-bold text-white">Degv's Messenger</p>
+                  <p className="text-[9px] text-[#00E676] font-medium">en línea</p>
+                </div>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/10 text-slate-200">
+                Vista Previa
+              </span>
+            </div>
+
+            {/* Sample Message Bubbles */}
+            <div className="relative z-10 space-y-2 py-1 overflow-hidden">
+              {/* Incoming Bubble */}
+              <div className="flex items-end gap-1.5 max-w-[80%]">
+                <div className="p-2.5 rounded-2xl rounded-bl-sm bg-slate-900/90 border border-white/10 text-slate-100 text-xs shadow-md backdrop-blur-md">
+                  <p className="text-[11px] leading-relaxed">
+                    ¡Hola! ¿Cómo se ve este fondo con los mensajes de chat? 🎨✨
+                  </p>
+                  <span className="text-[9px] text-slate-400 block text-right mt-0.5">10:42 AM</span>
+                </div>
+              </div>
+
+              {/* Outgoing Bubble */}
+              <div className="flex items-end justify-end gap-1.5 ml-auto max-w-[80%]">
+                <div className="p-2.5 rounded-2xl rounded-br-sm bg-gradient-to-r from-[#00E676] to-[#00E5FF] text-black text-xs font-medium shadow-md">
+                  <p className="text-[11px] font-semibold leading-relaxed">
+                    ¡Se ve espectacular! El contraste y la legibilidad son perfectos.
+                  </p>
+                  <div className="flex items-center justify-end gap-1 mt-0.5 text-[9px] text-slate-900 font-bold">
+                    <span>10:43 AM</span>
+                    <span title="Leído (Confirmación de lectura)">✓✓</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Mini Chat Input Bar Mockup */}
+            <div className="relative z-10 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-950/70 border border-white/10 backdrop-blur-md">
+              <span className="text-[11px] text-slate-400 flex-1">Escribe un mensaje...</span>
+              <div className="w-5 h-5 rounded-lg bg-[#00E676] flex items-center justify-center text-black font-black text-[10px]">
+                ➤
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Hidden File Input */}
@@ -188,25 +306,11 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
         />
 
         {/* Upload Custom & Paste URL Section */}
-        <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <Upload className="w-3.5 h-3.5 text-[#00E676]" />
-              <span>Usar foto propia o enlace web</span>
-            </label>
-            {currentWallpaper !== "default" && (
-              <button
-                onClick={() => {
-                  onSelectWallpaper("default");
-                  onClose();
-                }}
-                className="text-[11px] font-bold text-slate-400 hover:text-[#00E676] flex items-center gap-1 transition"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span>Restablecer fondo</span>
-              </button>
-            )}
-          </div>
+        <div className="p-3 sm:p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
+          <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+            <Upload className="w-3.5 h-3.5 text-[#00E676]" />
+            <span>Usar imagen personalizada (Archivo local o URL)</span>
+          </label>
 
           <div className="flex flex-col sm:flex-row gap-2">
             <button
@@ -228,18 +332,18 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
               />
               <button
                 type="submit"
-                className="px-3.5 py-2 bg-[#00E676] text-black font-black text-xs rounded-xl hover:bg-[#00E676]/90 transition shrink-0 shadow-[0_0_12px_rgba(0,230,118,0.3)]"
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition shrink-0"
               >
-                Aplicar
+                Probar URL
               </button>
             </form>
           </div>
         </div>
 
         {/* Categories Tabs */}
-        <div className="flex items-center gap-1.5 border-b border-slate-800 pb-2">
+        <div className="flex items-center gap-1.5 border-b border-slate-800 pb-2 overflow-x-auto custom-scrollbar">
           {[
-            { id: "all", label: "Colección Completa", icon: Layers },
+            { id: "all", label: "Todos", icon: Layers },
             { id: "gradient", label: "Degradados", icon: Palette },
             { id: "pattern", label: "Patrones Cyber", icon: Sparkles },
             { id: "image", label: "Fotografías HD", icon: Image },
@@ -249,7 +353,7 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
               <button
                 key={tab.id}
                 onClick={() => setSelectedTab(tab.id as any)}
-                className={`py-1.5 px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
+                className={`py-1.5 px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                   selectedTab === tab.id
                     ? "bg-[#00E676] text-black shadow-[0_0_10px_rgba(0,230,118,0.2)]"
                     : "bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800"
@@ -263,23 +367,21 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
         </div>
 
         {/* Curated Presets Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-72 overflow-y-auto custom-scrollbar p-1">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto custom-scrollbar p-1">
           {filteredPresets.map((p) => {
-            const isSelected = currentWallpaper === p.id;
+            const isSelected = previewWallpaper === p.id;
             return (
               <button
                 key={p.id}
-                onClick={() => {
-                  onSelectWallpaper(p.id);
-                  onClose();
-                }}
+                type="button"
+                onClick={() => setPreviewWallpaper(p.id)}
                 style={p.thumbnail || p.id.startsWith("http") ? { backgroundImage: `url("${p.thumbnail || p.id}")` } : undefined}
-                className={`group relative h-28 rounded-2xl border-2 p-2.5 flex flex-col justify-end transition overflow-hidden bg-cover bg-center ${
+                className={`group relative h-24 rounded-2xl border-2 p-2 flex flex-col justify-end transition overflow-hidden bg-cover bg-center ${
                   p.bgClass
                 } ${
                   isSelected
-                    ? "border-[#00E676] ring-2 ring-[#00E676]/40 shadow-lg shadow-[#00E676]/25"
-                    : "border-slate-800 hover:border-slate-600 hover:scale-[1.02]"
+                    ? "border-[#00E676] ring-2 ring-[#00E676]/40 shadow-lg shadow-[#00E676]/25 scale-[1.02]"
+                    : "border-slate-800 hover:border-slate-600 hover:scale-[1.01]"
                 }`}
               >
                 {/* Dark overlay for text readability */}
@@ -291,12 +393,45 @@ export const WallpaperSelectorModal: React.FC<WallpaperSelectorModalProps> = ({
 
                 {isSelected && (
                   <div className="absolute top-2 right-2 z-10 p-1 rounded-full bg-[#00E676] text-black shadow-md">
-                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                    <Check className="w-3 h-3 stroke-[3]" />
                   </div>
                 )}
               </button>
             );
           })}
+        </div>
+
+        {/* Bottom Action Footer with Cancel & Apply */}
+        <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition"
+          >
+            Cancelar
+          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onSelectWallpaper("default");
+                onClose();
+              }}
+              className="px-3.5 py-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-xs font-semibold transition"
+            >
+              Restablecer a Original
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSave}
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#00E676] to-[#00F0FF] text-black font-black text-xs shadow-[0_0_15px_rgba(0,230,118,0.35)] hover:scale-105 active:scale-95 transition flex items-center gap-1.5"
+            >
+              <Check className="w-4 h-4 stroke-[3]" />
+              <span>Aplicar Fondo al Chat</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

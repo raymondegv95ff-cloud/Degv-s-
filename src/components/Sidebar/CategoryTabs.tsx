@@ -29,6 +29,7 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
 
   const baseTabs: TabItem[] = [
     { id: "all", label: "Todos", icon: MessageSquare },
+    { id: "walkie", label: "Walkie-Talkie", icon: Radio, highlight: true },
     { id: "calls", label: "Llamadas", icon: Phone },
     { id: "status", label: "Estados", icon: Clock },
     { id: "unread", label: "No leídos", badge: unreadTotal > 0 ? unreadTotal : null },

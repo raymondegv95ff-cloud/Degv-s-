@@ -15,6 +15,7 @@ import {
   Terminal,
   RefreshCw,
   Cloud,
+  Radio,
 } from "lucide-react";
 
 interface SidebarHeaderProps {
@@ -29,6 +30,7 @@ interface SidebarHeaderProps {
   onOpenPlatformUpdate?: () => void;
   onOpenGitHubActions?: () => void;
   onOpenOracleCloud?: () => void;
+  onOpenWalkieTalkie?: () => void;
   isUpdateAvailable?: boolean;
   isOptimizing?: boolean;
   theme: ThemeMode;
@@ -48,6 +50,7 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
   onOpenPlatformUpdate,
   onOpenGitHubActions,
   onOpenOracleCloud,
+  onOpenWalkieTalkie,
   isUpdateAvailable = false,
   isOptimizing = false,
   theme,
@@ -162,6 +165,22 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
             GitHub Actions / APK
           </span>
         </button>
+
+        {/* Walkie-Talkie PTT Direct Access Button */}
+        {onOpenWalkieTalkie && (
+          <button
+            onClick={onOpenWalkieTalkie}
+            title="Estación Walkie-Talkie PTT (Transceptor de Radio Digital)"
+            className="p-1.5 rounded-xl hover:text-[#00E676] bg-cyan-950/40 border border-cyan-500/30 text-cyan-300 transition-colors relative group"
+            id="walkie-talkie-header-btn"
+          >
+            <Radio className="w-4 h-4 text-cyan-400" />
+            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-[#00E676] animate-pulse border border-[#0a0a0a]" />
+            <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-[#0a0a0a] text-cyan-300 font-bold text-[10px] py-0.5 px-2 rounded opacity-0 group-hover:opacity-100 transition pointer-events-none whitespace-nowrap z-50 border border-cyan-500/40 shadow-lg">
+              Walkie-Talkie PTT
+            </span>
+          </button>
+        )}
 
         {/* Android APK Guide Shortcut */}
         <button

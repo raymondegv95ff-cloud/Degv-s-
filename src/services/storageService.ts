@@ -1,5 +1,5 @@
 import { Room, Message, UserProfile, ThemeMode, BubbleStyle, NotificationSettings, UserStatusItem, SoundCustomizationSettings, CustomSoundItem, AccentColorOption, CacheStats, DayNightPaletteSettings, QuickReplyItem, AutoPurgeConfig, AutoPurgeReport } from "../types";
-import { currentUserMock, initialMockRooms, initialMockMessages, mockUsersList } from "./mockData";
+import { aiAssistantUser, createDefaultRoomsForUser, createDefaultMessagesForUser, mockUsersList } from "./mockData";
 
 const STORAGE_KEYS = {
   USER: "degvs_messenger_user",
@@ -50,17 +50,29 @@ export class StorageService {
   private static messagesCache: Record<string, Message[]> | null = null;
   private static lastCacheSync: number = Date.now();
 
+  // Helper to get user-scoped storage key
+  private static getUserRoomsKey(userId?: string): string {
+    const uid = userId || this.getCurrentUser()?.id;
+    return uid ? `${STORAGE_KEYS.ROOMS}_${uid}` : `${STORAGE_KEYS.ROOMS}_guest`;
+  }
+
+  private static getUserMessagesKey(userId?: string): string {
+    const uid = userId || this.getCurrentUser()?.id;
+    return uid ? `${STORAGE_KEYS.MESSAGES}_${uid}` : `${STORAGE_KEYS.MESSAGES}_guest`;
+  }
+
+  private static getUserContactsKey(userId?: string): string {
+    const uid = userId || this.getCurrentUser()?.id;
+    return uid ? `${STORAGE_KEYS.CONTACTS}_${uid}` : `${STORAGE_KEYS.CONTACTS}_guest`;
+  }
+
+  private static getUserStatusesKey(userId?: string): string {
+    const uid = userId || this.getCurrentUser()?.id;
+    return uid ? `${STORAGE_KEYS.STATUSES}_${uid}` : `${STORAGE_KEYS.STATUSES}_guest`;
+  }
+
   // Initialize storage defaults if empty and warm up memory cache
   public static init() {
-    if (!localStorage.getItem(STORAGE_KEYS.USER)) {
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(currentUserMock));
-    }
-    if (!localStorage.getItem(STORAGE_KEYS.ROOMS)) {
-      localStorage.setItem(STORAGE_KEYS.ROOMS, JSON.stringify(initialMockRooms));
-    }
-    if (!localStorage.getItem(STORAGE_KEYS.MESSAGES)) {
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(initialMockMessages));
-    }
     if (!localStorage.getItem(STORAGE_KEYS.AUTO_TIME_PALETTE)) {
       localStorage.setItem(STORAGE_KEYS.AUTO_TIME_PALETTE, "true");
     }
@@ -77,18 +89,25 @@ export class StorageService {
 
   private static warmCache() {
     try {
+      const user = this.getCurrentUser();
+      const defaultRooms = createDefaultRoomsForUser(user);
+      const defaultMessages = createDefaultMessagesForUser(user);
+
       if (!this.roomsCache) {
-        const roomsRaw = localStorage.getItem(STORAGE_KEYS.ROOMS);
-        this.roomsCache = roomsRaw ? JSON.parse(roomsRaw) : initialMockRooms;
+        const roomsKey = this.getUserRoomsKey(user?.id);
+        const roomsRaw = localStorage.getItem(roomsKey);
+        this.roomsCache = roomsRaw ? JSON.parse(roomsRaw) : defaultRooms;
       }
       if (!this.messagesCache) {
-        const msgsRaw = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-        this.messagesCache = msgsRaw ? JSON.parse(msgsRaw) : initialMockMessages;
+        const msgsKey = this.getUserMessagesKey(user?.id);
+        const msgsRaw = localStorage.getItem(msgsKey);
+        this.messagesCache = msgsRaw ? JSON.parse(msgsRaw) : defaultMessages;
       }
       this.lastCacheSync = Date.now();
     } catch {
-      this.roomsCache = initialMockRooms;
-      this.messagesCache = initialMockMessages;
+      const user = this.getCurrentUser();
+      this.roomsCache = createDefaultRoomsForUser(user);
+      this.messagesCache = createDefaultMessagesForUser(user);
     }
   }
 
@@ -104,8 +123,10 @@ export class StorageService {
 
     let sizeKb = 0;
     try {
-      const msgsRaw = localStorage.getItem(STORAGE_KEYS.MESSAGES) || "";
-      const roomsRaw = localStorage.getItem(STORAGE_KEYS.ROOMS) || "";
+      const msgsKey = this.getUserMessagesKey();
+      const msgsRaw = localStorage.getItem(msgsKey) || "";
+      const roomsKey = this.getUserRoomsKey();
+      const roomsRaw = localStorage.getItem(roomsKey) || "";
       sizeKb = Math.round((msgsRaw.length + roomsRaw.length) / 1024);
     } catch {}
 
@@ -146,35 +167,45 @@ export class StorageService {
     }
   }
 
-  // User Auth
-  public static getCurrentUser(): UserProfile {
-    this.init();
+  // User Auth - Return null if no user is authenticated
+  public static getCurrentUser(): UserProfile | null {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.USER);
-      if (!data) return currentUserMock;
+      if (!data) return null;
       const parsed = JSON.parse(data);
-      return (parsed && typeof parsed === "object" && parsed.id) ? parsed : currentUserMock;
+      if (parsed && typeof parsed === "object" && parsed.id) {
+        return parsed;
+      }
+      return null;
     } catch {
-      return currentUserMock;
+      return null;
     }
   }
 
-  public static setCurrentUser(user: UserProfile) {
-    if (user) {
+  public static setCurrentUser(user: UserProfile | null) {
+    if (user && user.id) {
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+      this.roomsCache = null;
+      this.messagesCache = null;
+      this.notifySync();
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      this.roomsCache = null;
+      this.messagesCache = null;
       this.notifySync();
     }
   }
 
   public static logout() {
     localStorage.removeItem(STORAGE_KEYS.USER);
+    this.roomsCache = null;
+    this.messagesCache = null;
     this.notifySync();
   }
 
   // Users Directory
   public static getAllUsers(): UserProfile[] {
     const me = this.getCurrentUser();
-    const meId = me?.id || "usr_me";
     let customContacts: UserProfile[] = [];
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CONTACTS);
@@ -182,7 +213,9 @@ export class StorageService {
     } catch {}
 
     const allMap = new Map<string, UserProfile>();
-    [me, ...mockUsersList, ...customContacts].forEach((u) => {
+    if (me && me.id) allMap.set(me.id, me);
+    allMap.set(aiAssistantUser.id, aiAssistantUser);
+    customContacts.forEach((u) => {
       if (u && u.id) allMap.set(u.id, u);
     });
 
@@ -191,19 +224,38 @@ export class StorageService {
 
   // Rooms
   public static getRooms(): Room[] {
-    this.init();
+    const user = this.getCurrentUser();
+    const defaultRooms = createDefaultRoomsForUser(user);
+
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.ROOMS);
-      if (!data) return initialMockRooms;
+      const roomsKey = this.getUserRoomsKey(user?.id);
+      const data = localStorage.getItem(roomsKey);
+      if (!data) return defaultRooms;
       const rooms: Room[] = JSON.parse(data);
-      return (Array.isArray(rooms) && rooms.length > 0) ? rooms : initialMockRooms;
+      if (Array.isArray(rooms) && rooms.length > 0) {
+        // Ensure only rooms matching this user or AI chat are returned
+        const filtered = rooms.filter((r) => {
+          if (!r) return false;
+          if (r.id === "room_ai_assistant" || r.isAiChat) return true;
+          if (!user) return false;
+          return r.participants?.some((p) => {
+            const pid = typeof p === "string" ? p : p?.id;
+            return pid === user.id;
+          });
+        });
+        return filtered.length > 0 ? filtered : defaultRooms;
+      }
+      return defaultRooms;
     } catch {
-      return initialMockRooms;
+      return defaultRooms;
     }
   }
 
   public static saveRooms(rooms: Room[]) {
-    localStorage.setItem(STORAGE_KEYS.ROOMS, JSON.stringify(rooms));
+    const user = this.getCurrentUser();
+    const roomsKey = this.getUserRoomsKey(user?.id);
+    this.roomsCache = rooms;
+    localStorage.setItem(roomsKey, JSON.stringify(rooms));
     this.notifySync();
   }
 
@@ -263,7 +315,14 @@ export class StorageService {
   }
 
   public static findOrCreateRoomWithUser(targetUser: UserProfile): Room {
-    if (!targetUser) return initialMockRooms[0];
+    if (!targetUser) {
+      return {
+        id: "room_general",
+        name: "General",
+        unreadCount: 0,
+        participants: [],
+      };
+    }
     const rooms = this.getRooms();
     const existing = rooms.find(r => r && !r.isGroup && !r.isChannel && r.participants && r.participants.some(p => p && p.id === targetUser.id));
 
@@ -289,40 +348,45 @@ export class StorageService {
 
   // Messages
   public static getAllMessagesMap(): Record<string, Message[]> {
-    this.init();
+    const user = this.getCurrentUser();
+    const defaultMessages = createDefaultMessagesForUser(user);
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-      const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+      const msgsKey = this.getUserMessagesKey(user?.id);
+      const data = localStorage.getItem(msgsKey);
+      const all: Record<string, Message[]> = data ? JSON.parse(data) : defaultMessages;
       this.messagesCache = all;
       return all;
     } catch {
-      return initialMockMessages;
+      return defaultMessages;
     }
   }
 
   public static getMessages(roomId: string): Message[] {
-    this.init();
+    const user = this.getCurrentUser();
+    const defaultMessages = createDefaultMessagesForUser(user);
     try {
       if (this.messagesCache && this.messagesCache[roomId]) {
         return this.messagesCache[roomId];
       }
-      const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-      const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+      const msgsKey = this.getUserMessagesKey(user?.id);
+      const data = localStorage.getItem(msgsKey);
+      const all: Record<string, Message[]> = data ? JSON.parse(data) : defaultMessages;
       this.messagesCache = all;
-      return all[roomId] || [];
+      return all[roomId] || (roomId === "room_ai_assistant" ? defaultMessages.room_ai_assistant || [] : []);
     } catch {
-      return [];
+      return roomId === "room_ai_assistant" ? defaultMessages.room_ai_assistant || [] : [];
     }
   }
 
   public static saveRoomMessages(roomId: string, messages: Message[]): void {
-    this.init();
+    const user = this.getCurrentUser();
     try {
+      const msgsKey = this.getUserMessagesKey(user?.id);
       const all = this.getAllMessagesMap();
       all[roomId] = messages;
       this.messagesCache = all;
       this.lastCacheSync = Date.now();
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(all));
+      localStorage.setItem(msgsKey, JSON.stringify(all));
       this.notifySync();
     } catch (e) {
       console.error("Error saving room messages:", e);
@@ -330,11 +394,12 @@ export class StorageService {
   }
 
   public static saveAllMessagesMap(allMsgs: Record<string, Message[]>): void {
-    this.init();
+    const user = this.getCurrentUser();
     try {
+      const msgsKey = this.getUserMessagesKey(user?.id);
       this.messagesCache = allMsgs;
       this.lastCacheSync = Date.now();
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(allMsgs));
+      localStorage.setItem(msgsKey, JSON.stringify(allMsgs));
       this.notifySync();
     } catch (e) {
       console.error("Error saving all messages map:", e);
@@ -342,14 +407,14 @@ export class StorageService {
   }
 
   public static sendMessage(roomId: string, message: Message): Message {
-    this.init();
-    const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+    const user = this.getCurrentUser();
+    const msgsKey = this.getUserMessagesKey(user?.id);
+    const all = this.getAllMessagesMap();
     const roomMsgs = all[roomId] || [];
 
     roomMsgs.push(message);
     all[roomId] = roomMsgs;
-    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(all));
+    localStorage.setItem(msgsKey, JSON.stringify(all));
 
     // Update room last message & time
     const rooms = this.getRooms();
@@ -371,8 +436,9 @@ export class StorageService {
   }
 
   public static addReaction(roomId: string, messageId: string, reaction: { emoji: string; userId: string; userName: string }) {
-    const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+    const user = this.getCurrentUser();
+    const msgsKey = this.getUserMessagesKey(user?.id);
+    const all = this.getAllMessagesMap();
     const roomMsgs = all[roomId] || [];
 
     const updatedMsgs = roomMsgs.map(m => {
@@ -385,13 +451,14 @@ export class StorageService {
     });
 
     all[roomId] = updatedMsgs;
-    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(all));
+    localStorage.setItem(msgsKey, JSON.stringify(all));
     this.notifySync();
   }
 
   public static toggleStarMessage(roomId: string, messageId: string) {
-    const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+    const user = this.getCurrentUser();
+    const msgsKey = this.getUserMessagesKey(user?.id);
+    const all = this.getAllMessagesMap();
     const roomMsgs = all[roomId] || [];
 
     const updatedMsgs = roomMsgs.map(m => {
@@ -402,13 +469,15 @@ export class StorageService {
     });
 
     all[roomId] = updatedMsgs;
+    localStorage.setItem(msgsKey, JSON.stringify(all));
     localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(all));
     this.notifySync();
   }
 
   public static votePoll(roomId: string, messageId: string, optionId: string, userId: string) {
-    const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+    const msgsKey = this.getUserMessagesKey();
+    const data = localStorage.getItem(msgsKey);
+    const all: Record<string, Message[]> = data ? JSON.parse(data) : {};
     const roomMsgs = all[roomId] || [];
 
     const updatedMsgs = roomMsgs.map(m => {
@@ -450,8 +519,9 @@ export class StorageService {
   }
 
   public static markMessagesAsRead(roomId: string, userId: string) {
-    const data = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    const all: Record<string, Message[]> = data ? JSON.parse(data) : initialMockMessages;
+    const msgsKey = this.getUserMessagesKey();
+    const data = localStorage.getItem(msgsKey);
+    const all: Record<string, Message[]> = data ? JSON.parse(data) : {};
     const roomMsgs = all[roomId] || [];
 
     let hasChanges = false;
@@ -653,7 +723,7 @@ export class StorageService {
       const data = localStorage.getItem(STORAGE_KEYS.STATUSES);
       let list: UserStatusItem[] = data ? JSON.parse(data) : [];
       
-      // If no statuses exist yet, populate with initial default statuses
+      // If no statuses exist yet, populate with initial default AI status only
       if (!data || list.length === 0) {
         const now = Date.now();
         list = [
@@ -661,42 +731,14 @@ export class StorageService {
             id: "stat_ai_01",
             userId: "usr_ai_assistant",
             userName: "Degv's AI",
-            userAvatar: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80",
-            type: "music",
-            content: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3?filename=cyberpunk-2099-10701.mp3",
-            mediaUrl: "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=600&auto=format&fit=crop&q=80",
-            musicTitle: "Cyber Synthwave 2088",
-            musicArtist: "Degv Beats",
-            duration: 12,
-            caption: "✨ ¡Prueba publicar estados de 24h con música, fotos, notas y videos!",
-            bgColor: "from-cyan-900 via-purple-900 to-black",
-            createdAt: "Hace 10m",
-            timestamp: now - 10 * 60 * 1000,
-          },
-          {
-            id: "stat_mariana_01",
-            userId: "usr_mariana_03",
-            userName: "Mariana Silva",
-            userAvatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-            type: "image",
-            content: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80",
-            caption: "Disfrutando de la vista al atardecer 🌅✨",
-            duration: 6,
-            createdAt: "Hace 25m",
-            timestamp: now - 25 * 60 * 1000,
-          },
-          {
-            id: "stat_carlos_01",
-            userId: "usr_carlos_02",
-            userName: "Carlos Mendoza",
-            userAvatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+            userAvatar: "/icon-512.png",
             type: "text",
-            content: "🚀 Codeando nuevas actualizaciones en Degv's Messenger 🔥",
-            bgColor: "from-purple-600 via-pink-600 to-indigo-700",
+            content: "✨ ¡Bienvenido a Degv's Messenger! Puedes publicar tus propios estados de 24 horas aquí.",
             duration: 6,
-            createdAt: "Hace 1h",
-            timestamp: now - 60 * 60 * 1000,
-          }
+            bgColor: "from-cyan-900 via-purple-900 to-black",
+            createdAt: "Ahora",
+            timestamp: now,
+          },
         ];
         localStorage.setItem(STORAGE_KEYS.STATUSES, JSON.stringify(list));
       }
@@ -1183,44 +1225,7 @@ export const storageService = {
       const saved = localStorage.getItem(STORAGE_KEYS.CALL_LOGS);
       if (saved) return JSON.parse(saved);
     } catch {}
-    // Initial mock call history
-    const initialLogs = [
-      {
-        id: "call_1",
-        peerId: "usr_2",
-        peerName: "Elena Rostova",
-        peerAvatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-        type: "video",
-        direction: "incoming",
-        timestamp: Date.now() - 3600000 * 2,
-        timeString: "Hoy, 16:45",
-        durationString: "12 min 30 s",
-      },
-      {
-        id: "call_2",
-        peerId: "usr_3",
-        peerName: "Marcus Vance",
-        peerAvatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-        type: "voice",
-        direction: "missed",
-        timestamp: Date.now() - 3600000 * 5,
-        timeString: "Hoy, 13:10",
-        durationString: "Perdida",
-      },
-      {
-        id: "call_3",
-        peerId: "usr_1",
-        peerName: "Alex Rivera",
-        peerAvatar: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80",
-        type: "voice",
-        direction: "outgoing",
-        timestamp: Date.now() - 86400000,
-        timeString: "Ayer, 20:15",
-        durationString: "04 min 18 s",
-      },
-    ];
-    localStorage.setItem(STORAGE_KEYS.CALL_LOGS, JSON.stringify(initialLogs));
-    return initialLogs;
+    return [];
   },
 
   saveCallLog: (log: any) => {

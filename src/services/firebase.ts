@@ -573,10 +573,14 @@ export function useAuth() {
 export async function registerWithFirebase(
   username: string,
   email: string,
-  pass: string
+  pass: string,
+  fullName?: string,
+  avatarUrl?: string
 ): Promise<UserProfile> {
   const cleanEmail = email.trim().toLowerCase();
   const cleanUsername = username.trim().toLowerCase().replace(/\s+/g, "_");
+  const cleanName = (fullName || cleanUsername).trim();
+  const cleanAvatar = avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanUsername)}`;
 
   // Create Firebase Auth user
   const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
@@ -584,13 +588,15 @@ export async function registerWithFirebase(
 
   // Update Auth Profile
   await updateProfile(fbUser, {
-    displayName: cleanUsername,
-    photoURL: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`,
+    displayName: cleanName,
+    photoURL: cleanAvatar,
   });
 
   const profile = mapFirebaseUserToProfile(fbUser, {
     username: cleanUsername,
+    firstName: cleanName,
     email: cleanEmail,
+    avatarUrl: cleanAvatar,
   });
 
   // Persist User Profile in Firestore

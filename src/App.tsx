@@ -28,6 +28,7 @@ import {
   getFirestoreUser,
   findOrCreateDirectRoom,
   listenForUserRooms,
+  logoutFromFirebase,
 } from "./services/firebase";
 import {
   doc,
@@ -48,6 +49,16 @@ import { ChatList } from "./components/Sidebar/ChatList";
 import { CallsList } from "./components/Sidebar/CallsList";
 
 import { StatusView } from "./components/Sidebar/StatusView";
+import { WalkieTalkieSidebarList } from "./components/Sidebar/WalkieTalkieSidebarList";
+import { WalkieTalkieView } from "./components/WalkieTalkie/WalkieTalkieView";
+import {
+  walkieTalkieService,
+  walkieAudioEngine,
+  RADIO_CHANNELS,
+  RadioChannel,
+  AudioModulationEffect,
+  WalkieTransmission,
+} from "./services/walkieTalkieService";
 import { UserStatusItem } from "./types";
 import { ChatArea } from "./components/Chat/ChatArea";
 import { Clock, Plus } from "lucide-react";
@@ -77,6 +88,7 @@ import { StorageCleanerModal } from "./components/Modals/StorageCleanerModal";
 import { PlatformUpdateModal } from "./components/Modals/PlatformUpdateModal";
 import { OracleCloudModal } from "./components/Modals/OracleCloudModal";
 import { DeleteChatModal } from "./components/Modals/DeleteChatModal";
+import { WalkieTalkieModal } from "./components/Modals/WalkieTalkieModal";
 import { SmartReplyService } from "./services/smartReplyService";
 import { platformUpdateService } from "./services/platformUpdateService";
 import { CrossPlatformUpdateState } from "./types";
@@ -92,6 +104,11 @@ export const App: React.FC = () => {
     return initialRooms[0]?.id || "room_ai_assistant";
   });
   const [activeCategory, setActiveCategory] = useState("all");
+  const [isWalkieTalkieOpen, setIsWalkieTalkieOpen] = useState(false);
+  const [walkieChannel, setWalkieChannel] = useState<RadioChannel>(() => walkieTalkieService.getActiveChannel());
+  const [walkieEffect, setWalkieEffect] = useState<AudioModulationEffect>("classic_radio");
+  const [isWalkieScanning, setIsWalkieScanning] = useState(false);
+  const [walkieTransmissions, setWalkieTransmissions] = useState<WalkieTransmission[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [showMobileChat, setShowMobileChat] = useState(false);
 
@@ -182,25 +199,30 @@ export const App: React.FC = () => {
     soundMutedRef.current = soundMuted;
   }, [soundMuted]);
 
-  // Firebase Auth State & Anonymous Bootstrap Listener
+  // Firebase Auth State & Bootstrap Listener
   useEffect(() => {
     const unsubscribe = subscribeToFirebaseAuth((fbUser) => {
       if (fbUser) {
         setCurrentUser(fbUser);
         storageService.saveUser(fbUser);
         registerUser(fbUser);
+        const userRooms = storageService.getRooms();
+        setRooms(userRooms);
+        const userMsgs = storageService.getAllMessagesMap();
+        setMessagesMap(userMsgs);
+        if (userRooms.length > 0) {
+          setActiveChatId(userRooms[0].id);
+        }
         setIsAuthModalOpen(false);
       }
     });
 
-    // Automatically ensure anonymous authentication on startup if not authenticated
     const bootstrapAuth = async () => {
       const stored = storageService.getUser();
       if (!stored || stored.id.startsWith("usr_default") || stored.id.startsWith("user_1")) {
-        const anon = await initAnonymousUser(stored || undefined);
-        setCurrentUser(anon);
-        storageService.saveUser(anon);
+        setIsAuthModalOpen(true);
       } else {
+        setCurrentUser(stored);
         registerUser(stored);
       }
     };
@@ -864,6 +886,13 @@ export const App: React.FC = () => {
   const handleAuthComplete = (user: UserProfile) => {
     setCurrentUser(user);
     storageService.saveUser(user);
+    const userRooms = storageService.getRooms();
+    setRooms(userRooms);
+    const userMsgs = storageService.getAllMessagesMap();
+    setMessagesMap(userMsgs);
+    if (userRooms.length > 0) {
+      setActiveChatId(userRooms[0].id);
+    }
     setIsAuthModalOpen(false);
   };
 
@@ -960,7 +989,8 @@ export const App: React.FC = () => {
   const handleSendMessage = async (
     content: string,
     type: "text" | "image" | "audio" | "file" | "sticker" = "text",
-    mediaUrl?: string
+    mediaUrl?: string,
+    audioDuration?: number
   ) => {
     const user = currentUser || storageService.getUser();
     const currentChatId = activeChatId || rooms[0]?.id || "room_ai_assistant";
@@ -1004,6 +1034,7 @@ export const App: React.FC = () => {
       content,
       text: content,
       mediaUrl,
+      audioDuration,
       attachment: mediaUrl ? { url: mediaUrl } : undefined,
       createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       timestamp: Date.now(),
@@ -1585,6 +1616,10 @@ export const App: React.FC = () => {
           onOpenPlatformUpdate={() => setIsPlatformUpdateOpen(true)}
           onOpenGitHubActions={() => setIsGitHubActionsModalOpen(true)}
           onOpenOracleCloud={() => setIsOracleCloudModalOpen(true)}
+          onOpenWalkieTalkie={() => {
+            setActiveCategory("walkie");
+            setShowMobileChat(true);
+          }}
           isUpdateAvailable={platformUpdateState.isUpdateAvailable}
           isOptimizing={platformUpdateState.isUpdating}
           theme={theme}
@@ -1612,9 +1647,27 @@ export const App: React.FC = () => {
           onAddFolder={handleAddFolder}
         />
 
-        {/* Scrollable Content: Calls, Statuses, or Chats */}
+        {/* Scrollable Content: Calls, Walkie-Talkie, Statuses, or Chats */}
         {activeCategory === "calls" ? (
           <CallsList onStartCall={handleStartCall} />
+        ) : activeCategory === "walkie" ? (
+          <WalkieTalkieSidebarList
+            selectedChannel={walkieChannel}
+            onSelectChannel={(ch) => {
+              setWalkieChannel(ch);
+              walkieTalkieService.setActiveChannel(ch);
+            }}
+            isTransmitting={false}
+            isScanning={isWalkieScanning}
+            onToggleScanner={() => setIsWalkieScanning((prev) => !prev)}
+            onTriggerPttModal={() => setIsWalkieTalkieOpen(true)}
+            selectedEffect={walkieEffect}
+            onSelectEffect={setWalkieEffect}
+            recentTransmissions={walkieTransmissions}
+            onPlayTransmission={(tx) => {
+              walkieAudioEngine.playRadioAudio(tx.audioDataUrl, 0.85, tx.modulation);
+            }}
+          />
         ) : activeCategory === "status" ? (
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-[#060a12]">
             <div className="bg-slate-900/90 border border-[#00E676]/40 rounded-3xl p-5 text-center space-y-3.5 shadow-xl">
@@ -1723,7 +1776,7 @@ export const App: React.FC = () => {
       {/* RIGHT MAIN CHAT AREA COLUMN */}
       <div
         className={`flex-1 flex flex-col h-full bg-[#050505] transition-all relative overflow-hidden ${
-          !showMobileChat && activeCategory !== "status" ? "hidden md:flex" : "flex"
+          !showMobileChat && activeCategory !== "status" && activeCategory !== "walkie" ? "hidden md:flex" : "flex"
         }`}
       >
         {/* Offline Connection Loss Detection & IndexedDB Queue Banner */}
@@ -1768,7 +1821,29 @@ export const App: React.FC = () => {
             </button>
           </div>
         )}
-        {activeCategory === "status" ? (
+        {activeCategory === "walkie" ? (
+          <WalkieTalkieView
+            currentUser={
+              currentUser || {
+                id: "guest",
+                username: "operador",
+                firstName: "Operador",
+                lastName: "Radio",
+                phone: "",
+                countryCode: "",
+                avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+                status: "online",
+              }
+            }
+            activeRoom={activeRoom}
+            rooms={rooms}
+            onSelectRoom={handleSelectRoom}
+            onSendVoiceToChat={(content, type, mediaUrl, audioDuration) => {
+              handleSendMessage(content, type, mediaUrl, audioDuration);
+            }}
+            onBackMobile={() => setShowMobileChat(false)}
+          />
+        ) : activeCategory === "status" ? (
           <StatusView
             currentUser={
               currentUser || {
@@ -1830,6 +1905,7 @@ export const App: React.FC = () => {
             readReceiptsEnabled={readReceiptsEnabled}
             onOpenLockSetup={() => setIsLockSetupModalOpen(true)}
             onToggleMuteChat={handleToggleMuteRoom}
+            onOpenWalkieTalkie={() => setIsWalkieTalkieOpen(true)}
           />
         )}
       </div>
@@ -1977,6 +2053,19 @@ export const App: React.FC = () => {
             setIsLockSetupModalOpen(true);
           }}
           onDeleteChat={handleDeleteChat}
+          onOpenWalkieTalkie={() => {
+            setIsContactDrawerOpen(false);
+            setIsWalkieTalkieOpen(true);
+          }}
+          onAddParticipants={(newMembers) => {
+            setRooms((prev) =>
+              prev.map((r) =>
+                r.id === activeRoom.id
+                  ? { ...r, participants: [...(r.participants || []), ...newMembers] }
+                  : r
+              )
+            );
+          }}
         />
       )}
 
@@ -2076,9 +2165,14 @@ export const App: React.FC = () => {
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onOpenSupportBot={() => setIsSupportBotOpen(true)}
         onOpenStorageCleaner={() => setIsStorageCleanerOpen(true)}
-        onLogout={() => {
+        onLogout={async () => {
+          await logoutFromFirebase();
           storageService.saveUser(null);
           setCurrentUser(null);
+          const emptyRooms = storageService.getRooms();
+          setRooms(emptyRooms);
+          setMessagesMap({});
+          setActiveChatId(null);
           setIsSettingsOpen(false);
           setIsAuthModalOpen(true);
         }}
@@ -2167,6 +2261,28 @@ export const App: React.FC = () => {
         call={incomingCall}
         onAccept={answerWebRtcCall}
         onDecline={declineWebRtcCall}
+      />
+
+      {/* Tactical Walkie-Talkie Multi-Channel Radio PTT Modal */}
+      <WalkieTalkieModal
+        isOpen={isWalkieTalkieOpen}
+        onClose={() => setIsWalkieTalkieOpen(false)}
+        currentUser={
+          currentUser || {
+            id: "guest",
+            username: "invitado",
+            firstName: "Usuario",
+            lastName: "",
+            phone: "+58 412 0000000",
+            countryCode: "+58",
+            avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+            status: "online",
+          }
+        }
+        activeRoom={activeRoom}
+        onSendVoiceToChat={(content, type, mediaUrl, audioDuration) => {
+          handleSendMessage(content, type, mediaUrl, audioDuration);
+        }}
       />
 
       {/* WebRTC Active Call & Video Modal */}
