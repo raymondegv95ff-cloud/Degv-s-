@@ -800,6 +800,7 @@ export function listenForMessages(
 ): Unsubscribe {
   try {
     const seenMsgIds = new Set<string>();
+    const seenClientMsgIds = new Set<string>();
     let isInitialSnapshot = true;
 
     const handleMessageDoc = (docSnap: any, isInitial: boolean) => {
@@ -824,11 +825,22 @@ export function listenForMessages(
       }
 
       const msgId = docSnap.id;
+      const clientMessageId = data.clientMessageId;
+
+      // Strict deduplication by both messageId and clientMessageId
       if (seenMsgIds.has(msgId)) {
         return;
       }
-      seenMsgIds.add(msgId);
+      if (clientMessageId && seenClientMsgIds.has(clientMessageId)) {
+        return;
+      }
 
+      seenMsgIds.add(msgId);
+      if (clientMessageId) {
+        seenClientMsgIds.add(clientMessageId);
+      }
+
+      // Safe normalization of timestamps and payload
       const messageObj = normalizeMessage(
         { id: msgId, ...data },
         data.roomId || data.conversationId

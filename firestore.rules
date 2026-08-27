@@ -9,6 +9,35 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isMessageSender() {
+      return isAuthenticated() && (
+        request.auth.uid == request.resource.data.senderId ||
+        (request.resource.data.senderId == null && isAuthenticated())
+      );
+    }
+
+    function isStrictMessageSender() {
+      return isAuthenticated() && (
+        request.auth.uid == request.resource.data.senderId ||
+        request.auth.uid == resource.data.senderId
+      );
+    }
+
+    function isStatusOrReceiptUpdate() {
+      // Allows recipient or participant to update delivery ('delivered'), read status ('read', 'isRead'), reactions and timestamps
+      // while ensuring senderId and message content cannot be altered.
+      return isAuthenticated() &&
+        request.resource.data.senderId == resource.data.senderId &&
+        (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'isRead', 'readAt', 'updatedAt', 'reactions', 'readBy']) ||
+          (
+            request.resource.data.status in ['sent', 'delivered', 'read', 'failed', 'pending'] &&
+            (!('text' in resource.data) || request.resource.data.text == resource.data.text) &&
+            (!('content' in resource.data) || request.resource.data.content == resource.data.content)
+          )
+        );
+    }
+
     // Users Collection: Authenticated users can list/read user directory, but only owner can write/edit their own profile
     match /users/{userId} {
       allow read: if isAuthenticated();
@@ -33,20 +62,33 @@ service cloud.firestore {
       }
     }
 
-    // Direct Messages & Real-Time Messages Collection
+    // Direct Messages & Real-Time Messages Collection (Legacy Compatibility)
     match /messages/{messageId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (request.auth.uid == request.resource.data.senderId || request.resource.data.senderId == null);
+      allow update: if isAuthenticated() && (
+        request.auth.uid == resource.data.senderId ||
+        isStatusOrReceiptUpdate()
+      );
+      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.senderId || resource.data.senderId == null);
+
       match /{allSubcollections=**} {
         allow read, write: if isAuthenticated();
       }
     }
 
-    // Nested Conversations Collection: conversations/{conversationId}/messages/{messageId}
+    // Canonical Nested Conversations Collection: conversations/{conversationId}/messages/{messageId}
     match /conversations/{conversationId} {
       allow read, write: if isAuthenticated();
 
       match /messages/{messageId} {
-        allow read, write: if isAuthenticated();
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && request.auth.uid == request.resource.data.senderId;
+        allow update: if isAuthenticated() && (
+          request.auth.uid == resource.data.senderId ||
+          isStatusOrReceiptUpdate()
+        );
+        allow delete: if isAuthenticated() && request.auth.uid == resource.data.senderId;
       }
 
       match /{allSubcollections=**} {
@@ -80,3 +122,4 @@ service cloud.firestore {
     }
   }
 }
+

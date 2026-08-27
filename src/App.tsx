@@ -560,8 +560,28 @@ export const App: React.FC = () => {
       setMessagesMap((prev) => {
         const localMsgs = prev[activeChatId] || [];
         const mergedMap = new Map<string, Message>();
-        localMsgs.forEach((m) => mergedMap.set(m.id, m));
-        cloudMsgs.forEach((m) => mergedMap.set(m.id, m));
+        const clientMsgMap = new Map<string, string>(); // clientMessageId -> id
+
+        // Populate local state
+        localMsgs.forEach((m) => {
+          if (m.id) {
+            mergedMap.set(m.id, m);
+            if (m.clientMessageId) clientMsgMap.set(m.clientMessageId, m.id);
+          }
+        });
+
+        // Merge incoming cloud messages, replacing matching clientMessageId or id
+        cloudMsgs.forEach((m) => {
+          if (m.clientMessageId && clientMsgMap.has(m.clientMessageId)) {
+            const prevId = clientMsgMap.get(m.clientMessageId)!;
+            mergedMap.delete(prevId);
+          }
+          if (m.id) {
+            mergedMap.set(m.id, m);
+            if (m.clientMessageId) clientMsgMap.set(m.clientMessageId, m.id);
+          }
+        });
+
         const mergedList = Array.from(mergedMap.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
         console.log(`[App Chat] 🔄 [Merged State Updated] Room '${activeChatId}' now has ${mergedList.length} total messages in React state.`);
         storageService.saveRoomMessages(activeChatId, mergedList);
@@ -997,7 +1017,7 @@ export const App: React.FC = () => {
     return analysis.suggestions;
   };
 
-  // Send Message Handler via Centralized Messenger Service
+  // Send Message Handler via Centralized Messenger Service (Truly Transactional)
   const handleSendMessage = async (
     content: string,
     type: "text" | "image" | "audio" | "file" | "sticker" = "text",
@@ -1009,7 +1029,9 @@ export const App: React.FC = () => {
     if (!currentChatId || !user) return;
 
     const isCurrentlyOnline = indexedDbQueueService.isOnline();
-    const clientMessageId = createClientMessageId();
+    const clientMessageId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : createClientMessageId();
 
     // Determine target recipient and participants list
     let targetRecipientId: string | undefined = undefined;
@@ -1032,8 +1054,10 @@ export const App: React.FC = () => {
       participants = [user.id, targetRecipientId || ""].filter(Boolean);
     }
 
+    // 1. Create Pending Optimistic Message (Status starts strictly as 'pending')
+    const optimisticMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const optimisticMessage: Message = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: optimisticMessageId,
       roomId: currentChatId,
       conversationId: currentChatId,
       senderId: user.id,
@@ -1051,7 +1075,7 @@ export const App: React.FC = () => {
       createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       timestamp: Date.now(),
       isRead: false,
-      status: isCurrentlyOnline ? "sent" : "pending",
+      status: "pending",
       clientMessageId,
       replyTo: replyToMessage?.id || null,
       replyToMessageId: replyToMessage?.id,
@@ -1064,7 +1088,7 @@ export const App: React.FC = () => {
         : undefined,
     };
 
-    console.log(`[Messenger][SEND] 📝 [App.tsx] Initiating sendMessage dispatch:`, {
+    console.log(`[Messenger][SEND] 📝 [App.tsx] Initiating transactional sendMessage:`, {
       messageId: optimisticMessage.id,
       clientMessageId,
       conversationId: currentChatId,
@@ -1080,7 +1104,7 @@ export const App: React.FC = () => {
     // Clear reply snippet
     setReplyToMessage(null);
 
-    // Save optimistic message locally
+    // 2. Render Pending Message Locally
     const initialUpdatedMessages = [...(messagesMap[currentChatId] || []), optimisticMessage];
     setMessagesMap((prev) => ({ ...prev, [currentChatId]: initialUpdatedMessages }));
     storageService.saveMessage(currentChatId, optimisticMessage);
@@ -1128,16 +1152,14 @@ export const App: React.FC = () => {
       customId: optimisticMessage.id,
     };
 
-    console.log(`[handleSendMessage] 🚀 [handleSendMessage: Firebase Write] Full payload object right before Firebase write operation:`, sendPayload);
-
-    // Dispatch through unifiedSendMessage
+    // 3. Dispatch and wait for Firestore backend confirmation
     try {
       const sendResult = await unifiedSendMessage(sendPayload);
 
-      console.log(`[handleSendMessage] ✅ [handleSendMessage: Firebase Write Result] Message sent to Firestore successfully:`, sendResult);
+      console.log(`[handleSendMessage] ✅ [handleSendMessage: Firebase Write Result] Persistence confirmed:`, sendResult);
 
-      // Update message status upon confirmation
       if (sendResult.success) {
+        // Transition state from 'pending' to 'sent' strictly upon backend confirmation
         setMessagesMap((prev) => {
           const currentList = prev[currentChatId] || [];
           const updated = currentList.map((m) =>
@@ -1148,9 +1170,33 @@ export const App: React.FC = () => {
           storageService.saveRoomMessages(currentChatId, updated);
           return { ...prev, [currentChatId]: updated };
         });
+      } else if (sendResult.isQueued) {
+        console.log(`[handleSendMessage] 💾 Message [${clientMessageId}] queued offline in IndexedDB.`);
+      } else {
+        // Mark as failed if write was rejected
+        setMessagesMap((prev) => {
+          const currentList = prev[currentChatId] || [];
+          const updated = currentList.map((m) =>
+            m.clientMessageId === clientMessageId || m.id === optimisticMessage.id
+              ? { ...m, status: "failed" as const }
+              : m
+          );
+          storageService.saveRoomMessages(currentChatId, updated);
+          return { ...prev, [currentChatId]: updated };
+        });
       }
     } catch (err: any) {
-      console.error("[handleSendMessage] ❌ [handleSendMessage: Firebase Write Error] Error dispatching message to Firebase:", err);
+      console.error("[handleSendMessage] ❌ Error dispatching message to Firebase:", err);
+      setMessagesMap((prev) => {
+        const currentList = prev[currentChatId] || [];
+        const updated = currentList.map((m) =>
+          m.clientMessageId === clientMessageId || m.id === optimisticMessage.id
+            ? { ...m, status: "failed" as const }
+            : m
+        );
+        storageService.saveRoomMessages(currentChatId, updated);
+        return { ...prev, [currentChatId]: updated };
+      });
     }
 
     // Record stats for analytics
@@ -1161,7 +1207,9 @@ export const App: React.FC = () => {
       if (!statsObj[todayKey]) statsObj[todayKey] = { messages: 0, usageMinutes: 0 };
       statsObj[todayKey].messages = (statsObj[todayKey].messages || 0) + 1;
       localStorage.setItem("degvs_messenger_daily_stats", JSON.stringify(statsObj));
-    } catch {}
+    } catch (statsErr) {
+      console.warn("[App] Analytics storage notice:", statsErr);
+    }
 
     // Only handle AI response if the user is explicitly in the dedicated Degv's AI chat or typing /imagine
     if (isCurrentlyOnline && (currentRoom?.isAiChat || content.startsWith("/imagine"))) {
