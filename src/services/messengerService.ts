@@ -345,15 +345,18 @@ export async function sendMessage(params: SendMessageParams): Promise<{
   // Safe defaults & validations
   const safeSenderId = senderId || "usr_me_01";
   const safeConversationId = conversationId || "room_ai_assistant";
-  const safeParticipants = participants && participants.length > 0 ? participants : [safeSenderId];
 
-  // Prevent generic "usr_all" in new private chats
+  // Prevent generic "usr_all" in new private chats and ensure recipient is correctly resolved
   let cleanRecipientId = recipientId;
-  if (cleanRecipientId === "usr_all" && safeConversationId.startsWith("dm_")) {
+  if ((!cleanRecipientId || cleanRecipientId === "usr_all") && safeConversationId.startsWith("dm_")) {
     const parts = safeConversationId.replace(/^dm_/, "").split("_");
     const other = parts.find((p) => p && p !== safeSenderId);
     if (other) cleanRecipientId = other;
   }
+
+  const safeParticipants = participants && participants.length > 0
+    ? Array.from(new Set([...participants, safeSenderId, cleanRecipientId].filter(Boolean) as string[]))
+    : Array.from(new Set([safeSenderId, cleanRecipientId].filter(Boolean) as string[]));
 
   const isOnline = indexedDbQueueService.isOnline();
   const messageDocRef = customId
@@ -371,7 +374,7 @@ export async function sendMessage(params: SendMessageParams): Promise<{
     senderAvatar,
     recipientId: cleanRecipientId,
     receiverId: cleanRecipientId,
-    participants: Array.from(new Set([...safeParticipants, safeSenderId, cleanRecipientId].filter(Boolean) as string[])),
+    participants: safeParticipants,
     type,
     text: resolvedText,
     content: resolvedText,
@@ -396,6 +399,7 @@ export async function sendMessage(params: SendMessageParams): Promise<{
     conversationId: safeConversationId,
     senderId: safeSenderId,
     recipientId: cleanRecipientId,
+    participants: safeParticipants,
     type,
     isOnline,
     hasMedia: !!(mediaUrl || attachment),
@@ -431,7 +435,7 @@ export async function sendMessage(params: SendMessageParams): Promise<{
       senderAvatar: senderAvatar || null,
       recipientId: cleanRecipientId || null,
       receiverId: cleanRecipientId || null,
-      participants: outgoingMessage.participants,
+      participants: safeParticipants,
       type,
       text: resolvedText,
       content: resolvedText,
@@ -461,7 +465,7 @@ export async function sendMessage(params: SendMessageParams): Promise<{
       await setDoc(legacyDocRef, firestorePayload, { merge: true });
     } catch {}
 
-    // Update rooms document lastMessage preview in Firestore
+    // Update rooms document in Firestore so recipient gets room in their sidebar in real-time
     try {
       const roomDocRef = doc(db, "rooms", safeConversationId);
       await setDoc(
@@ -470,7 +474,8 @@ export async function sendMessage(params: SendMessageParams): Promise<{
           id: safeConversationId,
           lastMessage: resolvedText || (type === "image" ? "📷 Imagen" : type === "audio" ? "🎵 Audio" : "Mensaje"),
           lastMessageTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          updatedAt: Date.now(),
+          participants: safeParticipants,
+          updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
@@ -535,20 +540,76 @@ export async function markMessageAsDelivered(
 }
 
 /**
- * Marks a message as read
+ * Marks a message as read in Firestore
  */
 export async function markMessageAsRead(
   conversationId: string,
   messageId: string,
   currentUserId: string
 ): Promise<void> {
-  if (!indexedDbQueueService.isOnline() || indexedDbQueueService.isQuotaExhausted()) return;
+  if (!indexedDbQueueService.isOnline() || indexedDbQueueService.isQuotaExhausted() || !messageId) return;
   try {
     const msgRef = doc(db, "conversations", conversationId, "messages", messageId);
     await updateDoc(msgRef, { isRead: true, status: "read", updatedAt: serverTimestamp() });
   } catch (e: any) {
     if (e?.code === "resource-exhausted") indexedDbQueueService.markQuotaExhausted(15);
   }
+
+  try {
+    const legacyMsgRef = doc(db, "messages", messageId);
+    await updateDoc(legacyMsgRef, { isRead: true, status: "read", updatedAt: serverTimestamp() });
+  } catch {}
+}
+
+/**
+ * Batch marks all unread incoming messages in a conversation as read by the recipient
+ * Only triggers when the recipient has actually opened and focused the active chat session.
+ */
+export async function markRoomMessagesAsRead(
+  conversationId: string,
+  currentUserId: string,
+  messagesToMark: Message[],
+  isChatSessionActive: boolean = true
+): Promise<void> {
+  if (!isChatSessionActive) return;
+  if (!conversationId || !currentUserId || !messagesToMark || messagesToMark.length === 0) return;
+  if (!indexedDbQueueService.isOnline() || indexedDbQueueService.isQuotaExhausted()) return;
+
+  // Filter ONLY incoming unread messages from other senders
+  const unreadFromOthers = messagesToMark.filter(
+    (m) => m && m.id && m.senderId && m.senderId !== currentUserId && (!m.isRead || m.status !== "read")
+  );
+
+  if (unreadFromOthers.length === 0) return;
+
+  console.log(`[Messenger][READ] 👁️ Recipient '${currentUserId}' opened active chat '${conversationId}'. Marking ${unreadFromOthers.length} messages as READ in Firestore.`);
+
+  const updatePromises = unreadFromOthers.map(async (msg) => {
+    const updatePayload = {
+      isRead: true,
+      status: "read",
+      readAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    // 1. Update in primary subcollection conversations/{conversationId}/messages/{msg.id}
+    try {
+      const msgRef = doc(db, "conversations", conversationId, "messages", msg.id);
+      await updateDoc(msgRef, updatePayload);
+    } catch (err: any) {
+      // If doc doesn't exist in nested path or quota, continue safely
+    }
+
+    // 2. Update in root messages/{msg.id} collection
+    try {
+      const legacyMsgRef = doc(db, "messages", msg.id);
+      await updateDoc(legacyMsgRef, updatePayload);
+    } catch (err: any) {
+      // Legacy path fallback
+    }
+  });
+
+  await Promise.allSettled(updatePromises);
 }
 
 /**

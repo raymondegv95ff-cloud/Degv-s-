@@ -36,7 +36,6 @@ interface ChatHeaderProps {
   onOpenContactDrawer: () => void;
   onOpenSearchInChat: () => void;
   onStartCall: (isVideo: boolean) => void;
-  onOpenWalkieTalkie?: () => void;
   onExportChat: () => void;
   onOpenWallpaperSelector: () => void;
   onOpenE2EEModal: () => void;
@@ -54,7 +53,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onOpenContactDrawer,
   onOpenSearchInChat,
   onStartCall,
-  onOpenWalkieTalkie,
   onExportChat,
   onOpenWallpaperSelector,
   onOpenE2EEModal,
@@ -203,18 +201,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </button>
         )}
 
-        {/* Walkie-Talkie PTT Radio Button */}
-        {onOpenWalkieTalkie && (
-          <button
-            onClick={onOpenWalkieTalkie}
-            className="p-1.5 rounded-xl hover:bg-white/5 text-slate-400 hover:text-[#00E676] hover:shadow-[0_0_12px_rgba(0,230,118,0.3)] transition-all flex items-center gap-1.5 group"
-            title="Modo Walkie-Talkie (Radiofrecuencia PTT)"
-          >
-            <Radio className="w-5 h-5 group-hover:scale-110 transition-transform text-[#00E676]" />
-            <span className="text-[11px] font-mono font-bold hidden lg:inline text-[#00E676]">PTT Radio</span>
-          </button>
-        )}
-
         <button
           onClick={() => onStartCall(false)}
           className="hover:text-[#00E676] transition-colors"
@@ -315,19 +301,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                       <span>Silenciar este chat</span>
                     </>
                   )}
-                </button>
-              )}
-
-              {onOpenWalkieTalkie && (
-                <button
-                  onClick={() => {
-                    setShowMenu(false);
-                    onOpenWalkieTalkie();
-                  }}
-                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 hover:text-[#00E676] flex items-center gap-2.5 transition-colors text-slate-200"
-                >
-                  <Radio className="w-4 h-4 text-[#00E676]" />
-                  <span>Modo Walkie-Talkie (PTT)</span>
                 </button>
               )}
 

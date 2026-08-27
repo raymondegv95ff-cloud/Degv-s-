@@ -1,6 +1,6 @@
 {
   "name": "Degv's Messenger",
-  "description": "Aplicación de mensajería instantánea con modo Walkie-Talkie Push-to-Talk (PTT) multi-canal y modulaciones RF, previsualizador de audio con ondas de sonido en tiempo real, IA Gemini (Degv's AI), Smart Reply, llamadas WebRTC y cifrado.",
+  "description": "Aplicación de mensajería instantánea en tiempo real con confirmación de entrega y lectura legítima, previsualizador de audio con ondas de sonido, IA Gemini (Degv's AI), Smart Reply, llamadas WebRTC y cifrado.",
   "requestFramePermissions": ["camera", "microphone", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

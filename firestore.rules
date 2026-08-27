@@ -18,17 +18,7 @@ service cloud.firestore {
 
     // Rooms Collection (Conversations & Group Channels)
     match /rooms/{roomId} {
-      allow read: if isAuthenticated() && (
-        resource == null ||
-        resource.data.participants == null ||
-        request.auth.uid in resource.data.participants
-      );
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated() && (
-        resource.data.participants == null ||
-        request.auth.uid in resource.data.participants
-      );
+      allow read, write: if isAuthenticated();
 
       match /{allSubcollections=**} {
         allow read, write: if isAuthenticated();
@@ -45,21 +35,10 @@ service cloud.firestore {
 
     // Direct Messages & Real-Time Messages Collection
     match /messages/{messageId} {
-      allow read: if isAuthenticated() && (
-        resource == null ||
-        resource.data.senderId == request.auth.uid ||
-        resource.data.receiverId == request.auth.uid ||
-        resource.data.recipientId == request.auth.uid ||
-        (resource.data.participants != null && request.auth.uid in resource.data.participants)
-      );
-      allow create: if isAuthenticated() && (
-        request.resource.data.senderId == request.auth.uid ||
-        request.resource.data.senderId == null
-      );
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated() && (
-        resource.data.senderId == request.auth.uid
-      );
+      allow read, write: if isAuthenticated();
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated();
+      }
     }
 
     // Nested Conversations Collection: conversations/{conversationId}/messages/{messageId}
@@ -67,9 +46,7 @@ service cloud.firestore {
       allow read, write: if isAuthenticated();
 
       match /messages/{messageId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated();
-        allow delete: if isAuthenticated() && resource.data.senderId == request.auth.uid;
+        allow read, write: if isAuthenticated();
       }
 
       match /{allSubcollections=**} {

@@ -799,41 +799,89 @@ export function listenForMessages(
   onNewMessage: (message: Message, isInitialLoad: boolean) => void
 ): Unsubscribe {
   try {
-    const q = query(
-      collection(db, "messages"),
-      where("receiverId", "==", currentUserId)
-    );
-
+    const seenMsgIds = new Set<string>();
     let isInitialSnapshot = true;
 
-    return onSnapshot(
-      q,
+    const handleMessageDoc = (docSnap: any, isInitial: boolean) => {
+      const data = docSnap.data();
+      if (!data) return;
+      
+      // Ignore messages sent by current user
+      if (data.senderId === currentUserId) {
+        return;
+      }
+
+      // Check if current user is intended recipient or participant
+      const isParticipant =
+        (Array.isArray(data.participants) && data.participants.includes(currentUserId)) ||
+        data.recipientId === currentUserId ||
+        data.receiverId === currentUserId ||
+        data.recipientId === "usr_all" ||
+        data.receiverId === "usr_all";
+
+      if (!isParticipant) {
+        return;
+      }
+
+      const msgId = docSnap.id;
+      if (seenMsgIds.has(msgId)) {
+        return;
+      }
+      seenMsgIds.add(msgId);
+
+      const messageObj = normalizeMessage(
+        { id: msgId, ...data },
+        data.roomId || data.conversationId
+      );
+      onNewMessage(messageObj, isInitial);
+    };
+
+    // Primary query: listen by participants array (covers direct chats and groups)
+    const qParticipants = query(
+      collection(db, "messages"),
+      where("participants", "array-contains", currentUserId)
+    );
+
+    const unsubParticipants = onSnapshot(
+      qParticipants,
       (snapshot) => {
         const isInitial = isInitialSnapshot;
         snapshot.docChanges().forEach((change) => {
-          if (change.type === "added") {
-            const data = change.doc.data();
-            
-            if (data.senderId === currentUserId) {
-              return;
-            }
-
-            const targetRecipient = data.recipientId || data.receiverId;
-            const isExplicitRecipient = targetRecipient === currentUserId || targetRecipient === "usr_all";
-            if (!isExplicitRecipient) {
-              return;
-            }
-
-            const messageObj = normalizeMessage({ id: change.doc.id, ...data }, data.roomId);
-            onNewMessage(messageObj, isInitial);
+          if (change.type === "added" || change.type === "modified") {
+            handleMessageDoc(change.doc, isInitial);
           }
         });
         isInitialSnapshot = false;
       },
       (error) => {
-        console.warn("[Firestore] listenForMessages notice:", error.message);
+        console.warn("[Firestore] listenForMessages (participants query) notice:", error.message);
       }
     );
+
+    // Complementary query: listen by receiverId for direct messages
+    const qReceiver = query(
+      collection(db, "messages"),
+      where("receiverId", "==", currentUserId)
+    );
+
+    const unsubReceiver = onSnapshot(
+      qReceiver,
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added" || change.type === "modified") {
+            handleMessageDoc(change.doc, false);
+          }
+        });
+      },
+      (error) => {
+        console.warn("[Firestore] listenForMessages (receiver query) notice:", error.message);
+      }
+    );
+
+    return () => {
+      unsubParticipants();
+      unsubReceiver();
+    };
   } catch (err) {
     console.warn("[Firestore] Failed to set up listener:", err);
     return () => {};

@@ -33,7 +33,6 @@ interface ViewContactDrawerProps {
   onOpenLockSetup?: () => void;
   onDeleteChat?: (roomId: string) => void;
   onAddParticipants?: (newParticipants: UserProfile[]) => void;
-  onOpenWalkieTalkie?: () => void;
 }
 
 export const ViewContactDrawer: React.FC<ViewContactDrawerProps> = ({
@@ -44,7 +43,6 @@ export const ViewContactDrawer: React.FC<ViewContactDrawerProps> = ({
   onOpenLockSetup,
   onDeleteChat,
   onAddParticipants,
-  onOpenWalkieTalkie,
 }) => {
   const [activeTab, setActiveTab] = useState<"media" | "sentiment" | "members">("media");
   const [mediaFilter, setMediaFilter] = useState<"all" | "images" | "files" | "audio">("all");
@@ -219,25 +217,6 @@ export const ViewContactDrawer: React.FC<ViewContactDrawerProps> = ({
           <p className="text-xs text-slate-400 italic px-4">
             {room.description || "Sin descripción de estado..."}
           </p>
-
-          {/* Quick Walkie-Talkie Radio Connection Action */}
-          {onOpenWalkieTalkie && (
-            <div className="pt-2 px-2">
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onOpenWalkieTalkie();
-                }}
-                className="w-full py-2.5 px-4 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border border-[#00E676]/50 hover:border-[#00E676] text-slate-100 font-bold text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(0,230,118,0.2)] hover:scale-[1.02] active:scale-[0.98] transition group"
-              >
-                <div className="p-1 rounded-lg bg-[#00E676]/20 text-[#00E676] group-hover:scale-110 transition-transform">
-                  <Radio className="w-4 h-4" />
-                </div>
-                <span>Conectar por Walkie-Talkie PTT</span>
-              </button>
-            </div>
-          )}
         </div>
 
         {/* Group Participants Section (For Group Chats or Rooms with Multiple Participants) */}
