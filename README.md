@@ -20,6 +20,8 @@
 | **💻 Termux Linux (Android)** | `ACTIVO` | Node 20 + Express Daemon + CPU Wake-Lock | Servidor Local Wi-Fi & Background |
 | **⚙️ GitHub Actions CI/CD** | `AUTOMATIZADO`| Workflows en `.github/workflows/` | Auto Build APK en cada push |
 
+> **Nota OTA:** Appflow tiene wind-down (ventas cerradas; apagado previsto Dic 31 2027). Alternativa Capacitor: [Capgo](https://capgo.app) — canales, rollback, cualquier CI/CD.
+
 ---
 
 ## 📂 Estructura del Repositorio
