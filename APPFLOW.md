@@ -65,6 +65,14 @@ Con Appflow Live Updates, puedes enviar actualizaciones de código web (JavaScri
 
 ---
 
+## 🔄 Alternativa OTA (Appflow wind-down)
+
+Ionic ha anunciado el fin de ventas de Appflow y un apagado previsto para el **31 de diciembre de 2027**. Si necesitas Live Updates OTA sin depender del cierre de Appflow, [Capgo](https://capgo.app) (`@capgo/capacitor-updater`) es una opción open-source para Capacitor: canales, rollback y cualquier CI/CD que ya uses (incluido GitHub Actions de este repo). Guía: https://capgo.app/docs/
+
+Las instrucciones de Appflow de arriba siguen siendo válidas mientras tu cuenta Appflow esté activa.
+
+---
+
 ## 💻 Comandos CLI de Ionic Appflow
 
 ```bash
